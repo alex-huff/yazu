@@ -1,10 +1,11 @@
 project('yazu', 'c')
 
-srcs = ['main.c']
+srcs = ['main.c', 'buffer.c']
 incdir = include_directories('include')
 
 wayland_client = dependency('wayland-client')
-deps = [wayland_client]
+cairo = dependency('cairo')
+deps = [wayland_client, cairo]
 
 subdir('protocols')
 

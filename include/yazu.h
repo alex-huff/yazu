@@ -4,7 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <time.h>
+#include <unistd.h>
 #include <wayland-client.h>
+#include <cairo.h>
 
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 

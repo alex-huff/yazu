@@ -1,4 +1,5 @@
 #include "yazu.h"
+#include "buffer.h"
 
 // BEGIN REGISTRY
 
@@ -6,11 +7,14 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		uint32_t name, const char *interface, uint32_t version) {
 	struct yazu *state = data;
 	if (strcmp(interface, wl_compositor_interface.name) == 0) {
-		state->wl_compositor = wl_registry_bind(wl_registry, name, &wl_compositor_interface, 6);
+		state->wl_compositor = wl_registry_bind(wl_registry, name,
+			&wl_compositor_interface, 6);
 	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
-		state->wl_shm = wl_registry_bind(wl_registry, name, &wl_shm_interface, 2);
+		state->wl_shm = wl_registry_bind(wl_registry, name,
+			&wl_shm_interface, 2);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
-		state->layer_shell = wl_registry_bind(wl_registry, name, &zwlr_layer_shell_v1_interface, 5);
+		state->layer_shell = wl_registry_bind(wl_registry, name,
+			&zwlr_layer_shell_v1_interface, 5);
 	}
 }
 
