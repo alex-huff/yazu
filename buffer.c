@@ -82,18 +82,10 @@ struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 	}
 
 	struct wl_shm_pool *pool = wl_shm_create_pool(wl_shm, fd, size);
-	if (pool == NULL) {
-		goto error_unmap;
-	}
-
 	wl_buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, wl_fmt);
-	if (wl_buffer == NULL) {
-		goto error_pool_destroy;
-	}
-
 	struct yazu_buffer *buffer = calloc(1, sizeof(struct yazu_buffer));
 	if (buffer == NULL) {
-		goto error_buffer_destroy;
+		goto error_wl_buffer_destroy;
 	}
 
 	buffer->width = width;
@@ -108,11 +100,9 @@ struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 	wl_shm_pool_destroy(pool);
 	close(fd);
 	return buffer;
-error_buffer_destroy:
+error_wl_buffer_destroy:
 	wl_buffer_destroy(wl_buffer);
-error_pool_destroy:
 	wl_shm_pool_destroy(pool);
-error_unmap:
 	munmap(data, size);
 error_close:
 	close(fd);
