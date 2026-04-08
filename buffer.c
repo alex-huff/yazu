@@ -116,3 +116,25 @@ void destroy_buffer(struct yazu_buffer *buffer) {
 	munmap(buffer->data, buffer->size);
 	free(buffer);
 }
+
+struct yazu_buffer *get_available_buffer(struct wl_shm *wl_shm,
+		struct yazu_buffer **buffers, uint8_t num_buffers,
+		uint32_t width, uint32_t height) {
+	size_t i;
+	for (i = 0; i < num_buffers; i++) {
+		if (buffers[i] == NULL || !buffers[i]->busy) {
+			break;
+		}
+	}
+	if (i == num_buffers) {
+		return NULL;
+	}
+	if (buffers[i] && (buffers[i]->width != width || buffers[i]->height != height)) {
+		destroy_buffer(buffers[i]);
+		buffers[i] = NULL;
+	}
+	if (buffers[i] == NULL) {
+		buffers[i] = create_buffer(wl_shm, width, height);
+	}
+	return buffers[i];
+}

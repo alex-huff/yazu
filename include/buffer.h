@@ -16,5 +16,8 @@ struct yazu_buffer {
 struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 		uint32_t height);
 void destroy_buffer(struct yazu_buffer *buffer);
+struct yazu_buffer *get_available_buffer(struct wl_shm *wl_shm,
+		struct yazu_buffer **buffers, uint8_t num_buffers,
+		uint32_t width, uint32_t height);
 
 #endif

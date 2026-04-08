@@ -12,12 +12,14 @@
 #include <wayland-client.h>
 #include <cairo.h>
 
+#include "buffer.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 struct yazu {
 	struct wl_compositor *wl_compositor;
 	struct wl_shm *wl_shm;
 	struct zwlr_layer_shell_v1 *layer_shell;
+	struct yazu_buffer *buffers[2];
 };
 
 #endif

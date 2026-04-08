@@ -56,6 +56,11 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 
+	for (size_t i = 0; i < 2; i++) {
+		if (yazu.buffers[i]) {
+			destroy_buffer(yazu.buffers[i]);
+		}
+	}
 	wl_display_disconnect(display);
 	return 0;
 }
