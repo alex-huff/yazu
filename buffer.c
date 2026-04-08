@@ -110,6 +110,9 @@ error_close:
 }
 
 void destroy_buffer(struct yazu_buffer *buffer) {
+	if (buffer == NULL) {
+		return;
+	}
 	cairo_destroy(buffer->cairo);
 	cairo_surface_destroy(buffer->cairo_surface);
 	wl_buffer_destroy(buffer->wl_buffer);

@@ -19,7 +19,12 @@ struct yazu {
 	struct wl_compositor *wl_compositor;
 	struct wl_shm *wl_shm;
 	struct zwlr_layer_shell_v1 *layer_shell;
+	struct wl_surface *wl_surface;
+	struct zwlr_layer_surface_v1 *layer_surface;
 	struct yazu_buffer *buffers[2];
+	bool running;
+	bool configured;
+	uint32_t width, height;
 };
 
 #endif
