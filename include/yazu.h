@@ -22,9 +22,16 @@ struct yazu {
 	struct wl_surface *wl_surface;
 	struct zwlr_layer_surface_v1 *layer_surface;
 	struct yazu_buffer *buffers[2];
+	struct wl_list outputs;
 	bool running;
 	bool configured;
+	int32_t scale;
 	uint32_t width, height;
+};
+
+struct yazu_output {
+	struct wl_list link;
+	struct wl_output *wl_output;
 };
 
 #endif

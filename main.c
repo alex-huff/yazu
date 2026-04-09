@@ -12,6 +12,17 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
 		yazu->wl_shm = wl_registry_bind(wl_registry, name,
 			&wl_shm_interface, 2);
+	} else if (strcmp(interface, wl_output_interface.name) == 0) {
+		struct yazu_output *output = calloc(1, sizeof(struct yazu_output));
+		if (output == NULL) {
+			fprintf(stderr, "failed to allocated output\n");
+			yazu->running = false;
+			return;
+		}
+		struct wl_output *wl_output = wl_registry_bind(wl_registry,
+			name, &wl_output_interface, 4);
+		output->wl_output = wl_output;
+		wl_list_insert(&yazu->outputs, &output->link);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 		yazu->layer_shell = wl_registry_bind(wl_registry, name,
 			&zwlr_layer_shell_v1_interface, 5);
@@ -28,6 +39,37 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 // END REGISTRY
+
+// BEGIN SURFACE
+
+static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
+		struct wl_output *wl_output) {
+}
+
+static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
+		struct wl_output *wl_output) {
+}
+
+#ifdef WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION
+static void surface_handle_preferred_buffer_scale(void *data, struct wl_surface *wl_surface, int32_t scale) {
+	struct yazu *yazu = data;
+	yazu->scale = scale;
+}
+
+static void surface_handle_preferred_buffer_transform(void *data, struct wl_surface *wl_surface, uint32_t transform) {
+}
+#endif
+
+static const struct wl_surface_listener surface_listener = {
+	.enter = surface_handle_enter,
+	.leave = surface_handle_leave,
+#ifdef WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION
+	.preferred_buffer_scale = surface_handle_preferred_buffer_scale,
+	.preferred_buffer_transform = surface_handle_preferred_buffer_transform,
+#endif
+};
+
+// END SURFACE
 
 // BEGIN LAYER SURFACE
 
@@ -77,14 +119,19 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 	struct yazu yazu = {
-		.running = true
+		.running = true,
+		.scale = 1,
 	};
+	wl_list_init(&yazu.outputs);
 	struct wl_registry *wl_registry = wl_display_get_registry(display);
 	wl_registry_add_listener(wl_registry, &registry_listener, &yazu);
 
 	// roundtrip for registry
 	wl_display_roundtrip(display);
 
+	if (!yazu.running) {
+		return EXIT_FAILURE;
+	}
 	if (yazu.wl_compositor == NULL) {
 		fprintf(stderr, "compositor doesn't support wl_compositor\n");
 		return EXIT_FAILURE;
@@ -99,6 +146,7 @@ int main(int argc, char **argv) {
 	}
 
 	yazu.wl_surface = wl_compositor_create_surface(yazu.wl_compositor);
+	wl_surface_add_listener(yazu.wl_surface, &surface_listener, &yazu);
 	yazu.layer_surface = zwlr_layer_shell_v1_get_layer_surface(
 		yazu.layer_shell, yazu.wl_surface, NULL,
 		ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "zoom");
@@ -115,6 +163,12 @@ int main(int argc, char **argv) {
 	while (yazu.running && wl_display_dispatch(display) != -1) {
 	}
 
+	struct yazu_output *output, *output_tmp;
+	wl_list_for_each_safe(output, output_tmp, &yazu.outputs, link) {
+		wl_list_remove(&output->link);
+		wl_output_destroy(output->wl_output);
+		free(output);
+	}
 	zwlr_layer_surface_v1_destroy(yazu.layer_surface);
 	wl_surface_destroy(yazu.wl_surface);
 	destroy_buffer(yazu.buffers[0]);
