@@ -23,6 +23,14 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 			name, &wl_output_interface, 4);
 		output->wl_output = wl_output;
 		wl_list_insert(&yazu->outputs, &output->link);
+	} else if (strcmp(interface, ext_image_copy_capture_manager_v1_interface.name) == 0) {
+		yazu->ext_image_copy_capture_manager = wl_registry_bind(
+			wl_registry, name,
+			&ext_image_copy_capture_manager_v1_interface, 1);
+	} else if (strcmp(interface, ext_output_image_capture_source_manager_v1_interface.name) == 0) {
+		yazu->ext_output_image_capture_source_manager = wl_registry_bind(
+			wl_registry, name,
+			&ext_output_image_capture_source_manager_v1_interface, 1);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 		yazu->layer_shell = wl_registry_bind(wl_registry, name,
 			&zwlr_layer_shell_v1_interface, 5);
@@ -138,6 +146,14 @@ int main(int argc, char **argv) {
 	}
 	if (yazu.wl_shm == NULL) {
 		fprintf(stderr, "compositor doesn't support wl_shm\n");
+		return EXIT_FAILURE;
+	}
+	if (yazu.ext_image_copy_capture_manager == NULL) {
+		fprintf(stderr, "compositor doesn't support ext-image-copy-capture\n");
+		return EXIT_FAILURE;
+	}
+	if (yazu.ext_output_image_capture_source_manager == NULL) {
+		fprintf(stderr, "compositor doesn't support ext-output-image-capture-source\n");
 		return EXIT_FAILURE;
 	}
 	if (yazu.layer_shell == NULL) {

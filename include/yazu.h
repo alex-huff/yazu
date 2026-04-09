@@ -13,11 +13,15 @@
 #include <cairo.h>
 
 #include "buffer.h"
+#include "ext-image-copy-capture-v1-client-protocol.h"
+#include "ext-image-capture-source-v1-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 struct yazu {
 	struct wl_compositor *wl_compositor;
 	struct wl_shm *wl_shm;
+	struct ext_image_copy_capture_manager_v1 *ext_image_copy_capture_manager;
+	struct ext_output_image_capture_source_manager_v1 *ext_output_image_capture_source_manager;
 	struct zwlr_layer_shell_v1 *layer_shell;
 	struct wl_surface *wl_surface;
 	struct zwlr_layer_surface_v1 *layer_surface;
