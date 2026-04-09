@@ -1,9 +1,6 @@
 #include "yazu.h"
 #include "buffer.h"
 
-static const enum wl_shm_format wl_fmt = WL_SHM_FORMAT_XRGB8888;
-static const cairo_format_t cairo_fmt = CAIRO_FORMAT_RGB24;
-
 // https://wayland-book.com/print.html
 static void randname(char *buf) {
 	struct timespec ts;
@@ -62,7 +59,8 @@ static const struct wl_buffer_listener buffer_listener = {
 // END BUFFER
 
 struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
-		uint32_t height) {
+		uint32_t height, enum wl_shm_format wl_fmt,
+		cairo_format_t cairo_fmt) {
 	uint32_t stride = cairo_format_stride_for_width(cairo_fmt, width);
 	size_t size = stride * height;
 	if (size == 0) {
@@ -137,7 +135,7 @@ struct yazu_buffer *get_available_buffer(struct wl_shm *wl_shm,
 		buffers[i] = NULL;
 	}
 	if (buffers[i] == NULL) {
-		buffers[i] = create_buffer(wl_shm, width, height);
+		buffers[i] = create_buffer(wl_shm, width, height, WL_SHM_FORMAT_ARGB8888, CAIRO_FORMAT_ARGB32);
 	}
 	return buffers[i];
 }

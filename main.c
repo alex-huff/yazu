@@ -1,5 +1,6 @@
 #include "yazu.h"
 #include "buffer.h"
+#include "pixfmt.h"
 
 // BEGIN REGISTRY
 
@@ -16,7 +17,7 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		struct yazu_output *output = calloc(1, sizeof(struct yazu_output));
 		if (output == NULL) {
 			fprintf(stderr, "failed to allocated output\n");
-			yazu->running = false;
+			yazu->failed = true;
 			return;
 		}
 		struct wl_output *wl_output = wl_registry_bind(wl_registry,
@@ -48,10 +49,164 @@ static const struct wl_registry_listener registry_listener = {
 
 // END REGISTRY
 
+// BEGIN IMAGE COPY FRAME
+
+static void ext_image_copy_capture_frame_handle_transform(void *data,
+		struct ext_image_copy_capture_frame_v1 *frame, uint32_t transform) {
+	struct yazu_capture *capture = data;
+	capture->transform = transform;
+}
+
+static void ext_image_copy_capture_frame_handle_damage(void *data,
+		struct ext_image_copy_capture_frame_v1 *frame, int32_t x, int32_t y,
+		int32_t width, int32_t height) {
+}
+
+static void ext_image_copy_capture_frame_handle_presentation_time(void *data,
+		struct ext_image_copy_capture_frame_v1 *frame, uint32_t tv_sec_hi,
+		uint32_t tv_sec_lo, uint32_t tv_nsec) {
+}
+
+static void ext_image_copy_capture_frame_handle_ready(void *data,
+		struct ext_image_copy_capture_frame_v1 *frame) {
+	struct yazu_capture *capture = data;
+	capture->frame_ready = true;
+	if (capture->byte_order != DEFAULT_BYTE_ORDER) {
+		reorder_bytes(capture->buffer->data, capture->buffer->size,
+			capture->byte_order);
+	}
+}
+
+static void ext_image_copy_capture_frame_handle_failed(void *data,
+		struct ext_image_copy_capture_frame_v1 *frame, uint32_t reason) {
+	struct yazu_capture *capture = data;
+	struct yazu *yazu = wl_container_of(capture, yazu, capture);
+	fprintf(stderr, "failed to copy frame from output\n");
+	yazu->failed = true;
+	yazu->running = false;
+}
+
+static const struct ext_image_copy_capture_frame_v1_listener ext_image_copy_capture_frame_listener = {
+	.transform = ext_image_copy_capture_frame_handle_transform,
+	.damage = ext_image_copy_capture_frame_handle_damage,
+	.presentation_time = ext_image_copy_capture_frame_handle_presentation_time,
+	.ready = ext_image_copy_capture_frame_handle_ready,
+	.failed = ext_image_copy_capture_frame_handle_failed,
+};
+
+// END IMAGE COPY FRAME
+
+// BEGIN IMAGE COPY SESSION
+
+static void ext_image_copy_capture_session_handle_buffer_size(void *data,
+		struct ext_image_copy_capture_session_v1 *session, uint32_t width, uint32_t height) {
+	struct yazu_capture *capture = data;
+	capture->buffer_width = width;
+	capture->buffer_height = height;
+}
+
+static void ext_image_copy_capture_session_handle_shm_format(void *data,
+		struct ext_image_copy_capture_session_v1 *session, uint32_t format) {
+	struct yazu_capture *capture = data;
+	if (capture->has_shm_format) {
+		return;
+	}
+
+	uint8_t byte_order = DEFAULT_BYTE_ORDER;
+	cairo_format_t cairo_format = wl_shm_format_to_cairo(format, &byte_order);
+	if (cairo_format == CAIRO_FORMAT_INVALID) {
+		return;
+	}
+
+	capture->shm_format = format;
+	capture->cairo_format = cairo_format;
+	capture->has_shm_format = true;
+	capture->byte_order = byte_order;
+}
+
+static void ext_image_copy_capture_session_handle_dmabuf_device(void *data,
+		struct ext_image_copy_capture_session_v1 *session,
+		struct wl_array *dev_id_array) {
+}
+
+static void ext_image_copy_capture_session_handle_dmabuf_format(void *data,
+		struct ext_image_copy_capture_session_v1 *session,
+		uint32_t format, struct wl_array *modifiers_array) {
+}
+
+static void ext_image_copy_capture_session_handle_done(void *data,
+		struct ext_image_copy_capture_session_v1 *session) {
+	struct yazu_capture *capture = data;
+	struct yazu *yazu = wl_container_of(capture, yazu, capture);
+	if (capture->capture_started) {
+		return;
+	}
+
+	capture->capture_started = true;
+	if (!capture->has_shm_format) {
+		fprintf(stderr, "no supported format found for output frame\n");
+		yazu->failed = true;
+		yazu->running = false;
+		return;
+	}
+
+	capture->buffer = create_buffer(yazu->wl_shm, capture->buffer_width, capture->buffer_height, capture->shm_format, capture->cairo_format);
+	if (capture->buffer == NULL) {
+		fprintf(stderr, "failed to create buffer for output frame\n");
+		yazu->failed = true;
+		yazu->running = false;
+		return;
+	}
+
+	capture->ext_image_copy_capture_frame = ext_image_copy_capture_session_v1_create_frame(session);
+	ext_image_copy_capture_frame_v1_add_listener(capture->ext_image_copy_capture_frame,
+		&ext_image_copy_capture_frame_listener, capture);
+	ext_image_copy_capture_frame_v1_attach_buffer(capture->ext_image_copy_capture_frame,
+		capture->buffer->wl_buffer);
+	ext_image_copy_capture_frame_v1_damage_buffer(capture->ext_image_copy_capture_frame,
+		0, 0, capture->buffer_width, capture->buffer_height);
+	ext_image_copy_capture_frame_v1_capture(capture->ext_image_copy_capture_frame);
+}
+
+static void ext_image_copy_capture_session_handle_stopped(void *data,
+		struct ext_image_copy_capture_session_v1 *session) {
+	struct yazu_capture *capture = data;
+	struct yazu *yazu = wl_container_of(capture, yazu, capture);
+	if (yazu->running && !capture->capture_started) {
+		fprintf(stderr, "capture session closed before frame could be captured\n");
+		yazu->failed = true;
+		yazu->running = false;
+	}
+}
+
+static const struct ext_image_copy_capture_session_v1_listener ext_image_copy_capture_session_listener = {
+	.buffer_size = ext_image_copy_capture_session_handle_buffer_size,
+	.shm_format = ext_image_copy_capture_session_handle_shm_format,
+	.dmabuf_device = ext_image_copy_capture_session_handle_dmabuf_device,
+	.dmabuf_format = ext_image_copy_capture_session_handle_dmabuf_format,
+	.done = ext_image_copy_capture_session_handle_done,
+	.stopped = ext_image_copy_capture_session_handle_stopped,
+};
+
+// END IMAGE COPY SESSION
+
 // BEGIN SURFACE
 
 static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
 		struct wl_output *wl_output) {
+	struct yazu *yazu = data;
+	uint32_t capture_options = 0;
+	// TODO make this configurable
+	if (true) {
+		capture_options |= EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_OPTIONS_PAINT_CURSORS;
+	}
+	struct ext_image_capture_source_v1 *output_source = ext_output_image_capture_source_manager_v1_create_source(
+		yazu->ext_output_image_capture_source_manager, wl_output);
+	yazu->capture.ext_image_copy_capture_session = ext_image_copy_capture_manager_v1_create_session(
+		yazu->ext_image_copy_capture_manager, output_source, capture_options);
+	ext_image_copy_capture_session_v1_add_listener(yazu->capture.ext_image_copy_capture_session,
+		&ext_image_copy_capture_session_listener, &yazu->capture);
+	ext_image_capture_source_v1_destroy(output_source);
 }
 
 static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
@@ -120,6 +275,16 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 
 // END LAYER SURFACE
 
+static void destroy_capture(struct yazu_capture *capture) {
+	if (capture->ext_image_copy_capture_frame) {
+		ext_image_copy_capture_frame_v1_destroy(capture->ext_image_copy_capture_frame);
+	}
+	if (capture->ext_image_copy_capture_session) {
+		ext_image_copy_capture_session_v1_destroy(capture->ext_image_copy_capture_session);
+	}
+	destroy_buffer(capture->buffer);
+}
+
 int main(int argc, char **argv) {
 	struct wl_display *display = wl_display_connect(NULL);
 	if (display == NULL) {
@@ -137,7 +302,7 @@ int main(int argc, char **argv) {
 	// roundtrip for registry
 	wl_display_roundtrip(display);
 
-	if (!yazu.running) {
+	if (yazu.failed) {
 		return EXIT_FAILURE;
 	}
 	if (yazu.wl_compositor == NULL) {
@@ -179,12 +344,15 @@ int main(int argc, char **argv) {
 	while (yazu.running && wl_display_dispatch(display) != -1) {
 	}
 
+	destroy_capture(&yazu.capture);
 	struct yazu_output *output, *output_tmp;
 	wl_list_for_each_safe(output, output_tmp, &yazu.outputs, link) {
 		wl_list_remove(&output->link);
 		wl_output_destroy(output->wl_output);
 		free(output);
 	}
+	ext_image_copy_capture_manager_v1_destroy(yazu.ext_image_copy_capture_manager);
+	ext_output_image_capture_source_manager_v1_destroy(yazu.ext_output_image_capture_source_manager);
 	zwlr_layer_surface_v1_destroy(yazu.layer_surface);
 	wl_surface_destroy(yazu.wl_surface);
 	destroy_buffer(yazu.buffers[0]);
@@ -199,5 +367,5 @@ int main(int argc, char **argv) {
 	wl_registry_destroy(wl_registry);
 	wl_display_disconnect(display);
 
-	return 0;
+	return yazu.failed;
 }
