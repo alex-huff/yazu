@@ -359,13 +359,14 @@ int main(int argc, char **argv) {
 	destroy_buffer(yazu.buffers[0]);
 	destroy_buffer(yazu.buffers[1]);
 
-	// allow surfaces to be unmapped
-	wl_display_roundtrip(display);
-
 	zwlr_layer_shell_v1_destroy(yazu.layer_shell);
 	wl_compositor_destroy(yazu.wl_compositor);
 	wl_shm_destroy(yazu.wl_shm);
 	wl_registry_destroy(wl_registry);
+
+	// ensure all queued requests have been received by server
+	wl_display_roundtrip(display);
+
 	wl_display_disconnect(display);
 
 	return yazu.failed;
