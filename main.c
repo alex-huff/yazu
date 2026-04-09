@@ -195,6 +195,7 @@ static const struct ext_image_copy_capture_session_v1_listener ext_image_copy_ca
 static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
 		struct wl_output *wl_output) {
 	struct yazu *yazu = data;
+	assert(yazu->configured);
 	uint32_t capture_options = 0;
 	// TODO make this configurable
 	if (true) {
