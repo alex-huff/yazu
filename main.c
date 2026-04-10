@@ -43,32 +43,33 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 	if (strcmp(interface, wl_compositor_interface.name) == 0) {
 		yazu->wl_compositor = wl_registry_bind(wl_registry, name,
 			&wl_compositor_interface, 6);
+		assert(yazu->wl_compositor);
 	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
 		yazu->wl_shm = wl_registry_bind(wl_registry, name,
 			&wl_shm_interface, 2);
+		assert(yazu->wl_shm);
 	} else if (strcmp(interface, wl_output_interface.name) == 0) {
 		struct yazu_output *output = calloc(1, sizeof(struct yazu_output));
-		if (output == NULL) {
-			fprintf(stderr, "failed to allocated output\n");
-			yazu->failed = true;
-			yazu->running = false;
-			return;
-		}
+		assert(output);
 		struct wl_output *wl_output = wl_registry_bind(wl_registry,
 			name, &wl_output_interface, 4);
+		assert(wl_output);
 		output->wl_output = wl_output;
 		wl_list_insert(&yazu->outputs, &output->link);
 	} else if (strcmp(interface, ext_image_copy_capture_manager_v1_interface.name) == 0) {
 		yazu->ext_image_copy_capture_manager = wl_registry_bind(
 			wl_registry, name,
 			&ext_image_copy_capture_manager_v1_interface, 1);
+		assert(yazu->ext_image_copy_capture_manager);
 	} else if (strcmp(interface, ext_output_image_capture_source_manager_v1_interface.name) == 0) {
 		yazu->ext_output_image_capture_source_manager = wl_registry_bind(
 			wl_registry, name,
 			&ext_output_image_capture_source_manager_v1_interface, 1);
+		assert(yazu->ext_output_image_capture_source_manager);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 		yazu->layer_shell = wl_registry_bind(wl_registry, name,
 			&zwlr_layer_shell_v1_interface, 5);
+		assert(yazu->layer_shell);
 	}
 }
 
@@ -217,6 +218,7 @@ static void ext_image_copy_capture_session_handle_done(void *data,
 
 	capture->buffer->busy = true;
 	capture->ext_image_copy_capture_frame = ext_image_copy_capture_session_v1_create_frame(session);
+	assert(capture->ext_image_copy_capture_frame);
 	ext_image_copy_capture_frame_v1_add_listener(capture->ext_image_copy_capture_frame,
 		&ext_image_copy_capture_frame_listener, capture);
 	ext_image_copy_capture_frame_v1_attach_buffer(capture->ext_image_copy_capture_frame,
@@ -268,8 +270,10 @@ static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
 	}
 	struct ext_image_capture_source_v1 *output_source = ext_output_image_capture_source_manager_v1_create_source(
 		yazu->ext_output_image_capture_source_manager, wl_output);
+	assert(output_source);
 	yazu->capture.ext_image_copy_capture_session = ext_image_copy_capture_manager_v1_create_session(
 		yazu->ext_image_copy_capture_manager, output_source, capture_options);
+	assert(yazu->capture.ext_image_copy_capture_session);
 	ext_image_copy_capture_session_v1_add_listener(yazu->capture.ext_image_copy_capture_session,
 		&ext_image_copy_capture_session_listener, &yazu->capture);
 	ext_image_capture_source_v1_destroy(output_source);
@@ -355,6 +359,7 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 
 static void setup_surface_frame_callback(struct yazu *yazu) {
 	yazu->surface_frame_callback = wl_surface_frame(yazu->wl_surface);
+	assert(yazu->surface_frame_callback);
 	wl_callback_add_listener(yazu->surface_frame_callback,
 		&surface_frame_listener, yazu);
 }
@@ -424,6 +429,7 @@ int main(int argc, char **argv) {
 	};
 	wl_list_init(&yazu.outputs);
 	struct wl_registry *wl_registry = wl_display_get_registry(display);
+	assert(wl_registry);
 	wl_registry_add_listener(wl_registry, &registry_listener, &yazu);
 
 	// roundtrip for registry
@@ -450,16 +456,14 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "compositor doesn't support zwlr_layer_shell_v1\n");
 		goto cleanup_bindings;
 	}
-	if (!yazu.running) {
-		ret_code = yazu.failed;
-		goto cleanup_bindings;
-	}
 
 	yazu.wl_surface = wl_compositor_create_surface(yazu.wl_compositor);
+	assert(yazu.wl_surface);
 	wl_surface_add_listener(yazu.wl_surface, &surface_listener, &yazu);
 	yazu.layer_surface = zwlr_layer_shell_v1_get_layer_surface(
 		yazu.layer_shell, yazu.wl_surface, NULL,
 		ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "zoom");
+	assert(yazu.layer_surface);
 	zwlr_layer_surface_v1_set_anchor(yazu.layer_surface,
 		ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
 		ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
