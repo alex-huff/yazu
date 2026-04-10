@@ -8,7 +8,7 @@ static void setup_surface_frame_callback(struct yazu *yazu);
 
 static void set_dirty(struct yazu *yazu);
 
-static bool prepare_frame(struct yazu *yazu);
+static bool send_frame(struct yazu *yazu);
 
 // BEGIN SURFACE FRAME
 
@@ -22,9 +22,7 @@ static void surface_frame_handle_done(void *data,
 	yazu->surface_frame_callback = NULL;
 
 	if (yazu->dirty) {
-		prepare_frame(yazu);
-		setup_surface_frame_callback(yazu);
-		wl_surface_commit(yazu->wl_surface);
+		send_frame(yazu);
 	}
 }
 
@@ -331,14 +329,12 @@ static void layer_surface_handle_configure(void *data,
 		return;
 	}
 
-	if (!prepare_frame(yazu)) {
-		fprintf(stderr, "failed to prepare first frame\n");
+	if (!send_frame(yazu)) {
+		fprintf(stderr, "failed to send first frame\n");
 		yazu->failed = true;
 		yazu->running = false;
 		return;
 	}
-
-	wl_surface_commit(yazu->wl_surface);
 }
 
 static void layer_surface_handle_closed(void *data,
@@ -377,12 +373,12 @@ static void set_dirty(struct yazu *yazu) {
 	wl_surface_commit(yazu->wl_surface);
 }
 
-static bool prepare_frame(struct yazu *yazu) {
+static bool send_frame(struct yazu *yazu) {
 	int32_t buffer_width = yazu->width * yazu->scale;
 	int32_t buffer_height = yazu->height * yazu->scale;
 	struct yazu_buffer *buffer = get_available_buffer(yazu->wl_shm, yazu->buffers, 2, buffer_width, buffer_height);
 	if (buffer == NULL) {
-		return false;
+		goto setup_callback;
 	}
 
 	buffer->busy = true;
@@ -399,7 +395,11 @@ static bool prepare_frame(struct yazu *yazu) {
 
 	yazu->dirty = true;
 
-	return true;
+setup_callback:
+	setup_surface_frame_callback(yazu);
+	wl_surface_commit(yazu->wl_surface);
+
+	return buffer != NULL;
 }
 
 static void destroy_capture(struct yazu_capture *capture) {
