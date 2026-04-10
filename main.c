@@ -2,7 +2,7 @@
 #include "buffer.h"
 #include "pixfmt.h"
 
-#define BAIL_IF_NOT_RUNNING if (!yazu->running) return;
+#define RETURN_IF_NOT_RUNNING if (!yazu->running) return;
 
 static void setup_surface_frame_callback(struct yazu *yazu);
 
@@ -16,7 +16,7 @@ static void surface_frame_handle_done(void *data,
 		struct wl_callback *wl_callback, uint32_t time) {
 	struct yazu *yazu = data;
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	wl_callback_destroy(wl_callback);
 	yazu->surface_frame_callback = NULL;
@@ -38,7 +38,7 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		uint32_t name, const char *interface, uint32_t version) {
 	struct yazu *yazu = data;
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	if (strcmp(interface, wl_compositor_interface.name) == 0) {
 		yazu->wl_compositor = wl_registry_bind(wl_registry, name,
@@ -90,7 +90,7 @@ static void ext_image_copy_capture_frame_handle_transform(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	capture->transform = transform;
 }
@@ -110,7 +110,7 @@ static void ext_image_copy_capture_frame_handle_ready(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	capture->frame_ready = true;
 	if (capture->byte_order != DEFAULT_BYTE_ORDER) {
@@ -125,7 +125,7 @@ static void ext_image_copy_capture_frame_handle_failed(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	fprintf(stderr, "failed to copy frame from output\n");
 	yazu->failed = true;
@@ -149,7 +149,7 @@ static void ext_image_copy_capture_session_handle_buffer_size(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	capture->buffer_width = width;
 	capture->buffer_height = height;
@@ -160,7 +160,7 @@ static void ext_image_copy_capture_session_handle_shm_format(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	if (capture->has_shm_format) {
 		return;
@@ -193,7 +193,7 @@ static void ext_image_copy_capture_session_handle_done(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	if (capture->capture_started) {
 		return;
@@ -231,7 +231,7 @@ static void ext_image_copy_capture_session_handle_stopped(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	if (!capture->capture_started) {
 		fprintf(stderr, "capture session closed before frame could be captured\n");
@@ -258,7 +258,7 @@ static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
 		struct wl_output *wl_output) {
 	struct yazu *yazu = data;
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	assert(yazu->configured);
 	uint32_t capture_options = 0;
@@ -283,7 +283,7 @@ static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
 static void surface_handle_preferred_buffer_scale(void *data, struct wl_surface *wl_surface, int32_t scale) {
 	struct yazu *yazu = data;
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	if (yazu->scale != scale) {
 		set_dirty(yazu);
@@ -313,7 +313,7 @@ static void layer_surface_handle_configure(void *data,
 		uint32_t width, uint32_t height) {
 	struct yazu *yazu = data;
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	bool is_initial_configure = !yazu->configured;
 	bool dimensions_changed = yazu->width != width || yazu->height != height;
@@ -341,7 +341,7 @@ static void layer_surface_handle_closed(void *data,
 		struct zwlr_layer_surface_v1 *surface) {
 	struct yazu *yazu = data;
 
-	BAIL_IF_NOT_RUNNING
+	RETURN_IF_NOT_RUNNING
 
 	yazu->running = false;
 }
@@ -429,28 +429,30 @@ int main(int argc, char **argv) {
 	// roundtrip for registry
 	wl_display_roundtrip(display);
 
-	if (yazu.failed) {
-		return EXIT_FAILURE;
-	}
+	bool ret_code = EXIT_FAILURE;
 	if (yazu.wl_compositor == NULL) {
 		fprintf(stderr, "compositor doesn't support wl_compositor\n");
-		return EXIT_FAILURE;
+		goto cleanup_bindings;
 	}
 	if (yazu.wl_shm == NULL) {
 		fprintf(stderr, "compositor doesn't support wl_shm\n");
-		return EXIT_FAILURE;
+		goto cleanup_bindings;
 	}
 	if (yazu.ext_image_copy_capture_manager == NULL) {
 		fprintf(stderr, "compositor doesn't support ext-image-copy-capture\n");
-		return EXIT_FAILURE;
+		goto cleanup_bindings;
 	}
 	if (yazu.ext_output_image_capture_source_manager == NULL) {
 		fprintf(stderr, "compositor doesn't support ext-output-image-capture-source\n");
-		return EXIT_FAILURE;
+		goto cleanup_bindings;
 	}
 	if (yazu.layer_shell == NULL) {
 		fprintf(stderr, "compositor doesn't support zwlr_layer_shell_v1\n");
-		return EXIT_FAILURE;
+		goto cleanup_bindings;
+	}
+	if (!yazu.running) {
+		ret_code = yazu.failed;
+		goto cleanup_bindings;
 	}
 
 	yazu.wl_surface = wl_compositor_create_surface(yazu.wl_compositor);
@@ -470,16 +472,9 @@ int main(int argc, char **argv) {
 
 	while (yazu.running && wl_display_dispatch(display) != -1) {
 	}
+	ret_code = yazu.failed;
 
 	destroy_capture(&yazu.capture);
-	struct yazu_output *output, *output_tmp;
-	wl_list_for_each_safe(output, output_tmp, &yazu.outputs, link) {
-		wl_list_remove(&output->link);
-		wl_output_destroy(output->wl_output);
-		free(output);
-	}
-	ext_image_copy_capture_manager_v1_destroy(yazu.ext_image_copy_capture_manager);
-	ext_output_image_capture_source_manager_v1_destroy(yazu.ext_output_image_capture_source_manager);
 	zwlr_layer_surface_v1_destroy(yazu.layer_surface);
 	wl_surface_destroy(yazu.wl_surface);
 	destroy_buffer(yazu.buffers[0]);
@@ -489,9 +484,28 @@ int main(int argc, char **argv) {
 		wl_callback_destroy(yazu.surface_frame_callback);
 	}
 
-	zwlr_layer_shell_v1_destroy(yazu.layer_shell);
-	wl_compositor_destroy(yazu.wl_compositor);
-	wl_shm_destroy(yazu.wl_shm);
+cleanup_bindings:
+	if (yazu.layer_shell) {
+		zwlr_layer_shell_v1_destroy(yazu.layer_shell);
+	}
+	if (yazu.ext_output_image_capture_source_manager) {
+		ext_output_image_capture_source_manager_v1_destroy(yazu.ext_output_image_capture_source_manager);
+	}
+	if (yazu.ext_image_copy_capture_manager) {
+		ext_image_copy_capture_manager_v1_destroy(yazu.ext_image_copy_capture_manager);
+	}
+	struct yazu_output *output, *output_tmp;
+	wl_list_for_each_safe(output, output_tmp, &yazu.outputs, link) {
+		wl_list_remove(&output->link);
+		wl_output_destroy(output->wl_output);
+		free(output);
+	}
+	if (yazu.wl_shm) {
+		wl_shm_destroy(yazu.wl_shm);
+	}
+	if (yazu.wl_compositor) {
+		wl_compositor_destroy(yazu.wl_compositor);
+	}
 	wl_registry_destroy(wl_registry);
 
 	// ensure all queued requests have been received by server
@@ -499,5 +513,5 @@ int main(int argc, char **argv) {
 
 	wl_display_disconnect(display);
 
-	return yazu.failed;
+	return ret_code;
 }
