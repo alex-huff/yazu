@@ -47,6 +47,8 @@ struct yazu {
 	struct wl_surface *wl_surface;
 	struct zwlr_layer_surface_v1 *layer_surface;
 
+	struct wl_callback *surface_frame_callback;
+
 	struct yazu_buffer *buffers[2];
 
 	struct yazu_capture capture;
@@ -54,6 +56,7 @@ struct yazu {
 	bool running;
 	bool failed;
 	bool configured;
+	bool dirty;
 
 	int32_t scale;
 	uint32_t width, height;
