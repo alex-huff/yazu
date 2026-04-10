@@ -42,6 +42,7 @@ struct yazu {
 	struct ext_output_image_capture_source_manager_v1 *ext_output_image_capture_source_manager;
 	struct zwlr_layer_shell_v1 *layer_shell;
 
+	struct wl_list seats;
 	struct wl_list outputs;
 
 	struct wl_surface *wl_surface;
@@ -60,6 +61,13 @@ struct yazu {
 
 	int32_t scale;
 	uint32_t width, height;
+};
+
+struct yazu_seat {
+	struct yazu *yazu;
+	struct wl_list link;
+	struct wl_seat *wl_seat;
+	struct wl_pointer *wl_pointer;
 };
 
 struct yazu_output {

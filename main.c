@@ -10,27 +10,86 @@ static void set_dirty(struct yazu *yazu);
 
 static bool send_frame(struct yazu *yazu);
 
-// BEGIN SURFACE FRAME
+// BEGIN POINTER
 
-static void surface_frame_handle_done(void *data,
-		struct wl_callback *wl_callback, uint32_t time) {
-	struct yazu *yazu = data;
+static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
+		uint32_t serial, struct wl_surface *surface,
+		wl_fixed_t surface_x, wl_fixed_t surface_y) {
+	struct yazu_seat *seat = data;
+	struct yazu *yazu = seat->yazu;
 
 	RETURN_IF_NOT_RUNNING
 
-	wl_callback_destroy(wl_callback);
-	yazu->surface_frame_callback = NULL;
+}
 
-	if (yazu->dirty) {
-		send_frame(yazu);
+static void pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
+		uint32_t serial, struct wl_surface *surface) {
+	struct yazu_seat *seat = data;
+	struct yazu *yazu = seat->yazu;
+
+	RETURN_IF_NOT_RUNNING
+
+}
+
+static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
+		uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y) {
+	struct yazu_seat *seat = data;
+	struct yazu *yazu = seat->yazu;
+
+	RETURN_IF_NOT_RUNNING
+
+}
+
+static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
+		uint32_t serial, uint32_t time, uint32_t button,
+		uint32_t button_state) {
+	struct yazu_seat *seat = data;
+	struct yazu *yazu = seat->yazu;
+
+	RETURN_IF_NOT_RUNNING
+
+}
+
+static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
+		uint32_t time, uint32_t axis, wl_fixed_t fixed_value) {
+	struct yazu_seat *seat = data;
+	struct yazu *yazu = seat->yazu;
+
+	RETURN_IF_NOT_RUNNING
+
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	.enter = pointer_handle_enter,
+	.leave = pointer_handle_leave,
+	.motion = pointer_handle_motion,
+	.button = pointer_handle_button,
+	.axis = pointer_handle_axis,
+};
+
+// END POINTER
+
+// BEGIN SEAT
+
+static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
+		uint32_t capabilities) {
+	struct yazu_seat *seat = data;
+	struct yazu *yazu = seat->yazu;
+
+	RETURN_IF_NOT_RUNNING
+
+	if (capabilities & WL_SEAT_CAPABILITY_POINTER) {
+		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
+		assert(seat->wl_pointer);
+		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
 	}
 }
 
-static const struct wl_callback_listener surface_frame_listener = {
-	.done = surface_frame_handle_done,
+static const struct wl_seat_listener seat_listener = {
+	.capabilities = seat_handle_capabilities,
 };
 
-// END SURFACE FRAME
+// END SEAT
 
 // BEGIN REGISTRY
 
@@ -42,17 +101,27 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 
 	if (strcmp(interface, wl_compositor_interface.name) == 0) {
 		yazu->wl_compositor = wl_registry_bind(wl_registry, name,
-			&wl_compositor_interface, 6);
+			&wl_compositor_interface, 3);
 		assert(yazu->wl_compositor);
 	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
 		yazu->wl_shm = wl_registry_bind(wl_registry, name,
-			&wl_shm_interface, 2);
+			&wl_shm_interface, 1);
 		assert(yazu->wl_shm);
+	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
+		struct yazu_seat *seat = calloc(1, sizeof(struct yazu_seat));
+		assert(seat);
+		seat->yazu = yazu;
+		struct wl_seat *wl_seat = wl_registry_bind(wl_registry, name,
+			&wl_seat_interface, 1);
+		assert(wl_seat);
+		seat->wl_seat = wl_seat;
+		wl_seat_add_listener(wl_seat, &seat_listener, seat);
+		wl_list_insert(&yazu->seats, &seat->link);
 	} else if (strcmp(interface, wl_output_interface.name) == 0) {
 		struct yazu_output *output = calloc(1, sizeof(struct yazu_output));
 		assert(output);
 		struct wl_output *wl_output = wl_registry_bind(wl_registry,
-			name, &wl_output_interface, 4);
+			name, &wl_output_interface, 1);
 		assert(wl_output);
 		output->wl_output = wl_output;
 		wl_list_insert(&yazu->outputs, &output->link);
@@ -68,7 +137,7 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		assert(yazu->ext_output_image_capture_source_manager);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 		yazu->layer_shell = wl_registry_bind(wl_registry, name,
-			&zwlr_layer_shell_v1_interface, 5);
+			&zwlr_layer_shell_v1_interface, 1);
 		assert(yazu->layer_shell);
 	}
 }
@@ -357,6 +426,28 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 
 // END LAYER SURFACE
 
+// BEGIN SURFACE FRAME
+
+static void surface_frame_handle_done(void *data,
+		struct wl_callback *wl_callback, uint32_t time) {
+	struct yazu *yazu = data;
+
+	RETURN_IF_NOT_RUNNING
+
+	wl_callback_destroy(wl_callback);
+	yazu->surface_frame_callback = NULL;
+
+	if (yazu->dirty) {
+		send_frame(yazu);
+	}
+}
+
+static const struct wl_callback_listener surface_frame_listener = {
+	.done = surface_frame_handle_done,
+};
+
+// END SURFACE FRAME
+
 static void setup_surface_frame_callback(struct yazu *yazu) {
 	yazu->surface_frame_callback = wl_surface_frame(yazu->wl_surface);
 	assert(yazu->surface_frame_callback);
@@ -427,6 +518,7 @@ int main(int argc, char **argv) {
 		.running = true,
 		.scale = 1,
 	};
+	wl_list_init(&yazu.seats);
 	wl_list_init(&yazu.outputs);
 	struct wl_registry *wl_registry = wl_display_get_registry(display);
 	assert(wl_registry);
@@ -498,6 +590,15 @@ cleanup_bindings:
 	}
 	if (yazu.ext_image_copy_capture_manager) {
 		ext_image_copy_capture_manager_v1_destroy(yazu.ext_image_copy_capture_manager);
+	}
+	struct yazu_seat *seat, *seat_tmp;
+	wl_list_for_each_safe(seat, seat_tmp, &yazu.seats, link) {
+		wl_list_remove(&seat->link);
+		if (seat->wl_pointer) {
+			wl_pointer_destroy(seat->wl_pointer);
+		}
+		wl_seat_destroy(seat->wl_seat);
+		free(seat);
 	}
 	struct yazu_output *output, *output_tmp;
 	wl_list_for_each_safe(output, output_tmp, &yazu.outputs, link) {
