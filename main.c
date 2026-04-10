@@ -470,9 +470,10 @@ int main(int argc, char **argv) {
 		&layer_surface_listener, &yazu);
 	wl_surface_commit(yazu.wl_surface);
 
-	while (yazu.running && wl_display_dispatch(display) != -1) {
+	int num_dispatched = 0;
+	while (yazu.running && (num_dispatched = wl_display_dispatch(display)) != -1) {
 	}
-	ret_code = yazu.failed;
+	ret_code = yazu.failed || (num_dispatched == -1);
 
 	destroy_capture(&yazu.capture);
 	zwlr_layer_surface_v1_destroy(yazu.layer_surface);
