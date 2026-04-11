@@ -321,7 +321,7 @@ static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
 
 	assert(yazu->configured);
 	uint32_t capture_options = 0;
-	// TODO make this configurable
+	// TODO: make this configurable
 	if (true) {
 		capture_options |= EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_OPTIONS_PAINT_CURSORS;
 	}
@@ -346,6 +346,7 @@ static void surface_handle_preferred_buffer_scale(void *data, struct wl_surface 
 
 	RETURN_IF_NOT_RUNNING
 
+	// TODO: use fractional scale
 	if (yazu->scale != scale) {
 		set_dirty(yazu);
 	}
@@ -396,6 +397,8 @@ static void layer_surface_handle_configure(void *data,
 		yazu->running = false;
 		return;
 	}
+
+	setup_surface_frame_callback(yazu);
 }
 
 static void layer_surface_handle_closed(void *data,
@@ -424,6 +427,7 @@ static void surface_frame_handle_done(void *data,
 
 	if (yazu->dirty) {
 		send_frame(yazu);
+		setup_surface_frame_callback(yazu);
 	}
 }
 
@@ -438,6 +442,7 @@ static void setup_surface_frame_callback(struct yazu *yazu) {
 	assert(yazu->surface_frame_callback);
 	wl_callback_add_listener(yazu->surface_frame_callback,
 		&surface_frame_listener, yazu);
+	wl_surface_commit(yazu->wl_surface);
 }
 
 static void set_dirty(struct yazu *yazu) {
@@ -451,7 +456,6 @@ static void set_dirty(struct yazu *yazu) {
 	}
 
 	setup_surface_frame_callback(yazu);
-	wl_surface_commit(yazu->wl_surface);
 }
 
 static bool send_frame(struct yazu *yazu) {
@@ -459,7 +463,7 @@ static bool send_frame(struct yazu *yazu) {
 	int32_t buffer_height = yazu->height * yazu->scale;
 	struct yazu_buffer *buffer = get_available_buffer(yazu->wl_shm, yazu->buffers, 2, buffer_width, buffer_height);
 	if (buffer == NULL) {
-		goto setup_callback;
+		return false;
 	}
 
 	buffer->busy = true;
@@ -473,14 +477,11 @@ static bool send_frame(struct yazu *yazu) {
 	wl_surface_attach(yazu->wl_surface, buffer->wl_buffer, 0, 0);
 	wl_surface_set_buffer_scale(yazu->wl_surface, yazu->scale);
 	wl_surface_damage(yazu->wl_surface, 0, 0, yazu->width, yazu->height);
+	wl_surface_commit(yazu->wl_surface);
 
 	yazu->dirty = true;
 
-setup_callback:
-	setup_surface_frame_callback(yazu);
-	wl_surface_commit(yazu->wl_surface);
-
-	return buffer != NULL;
+	return true;
 }
 
 static void destroy_capture(struct yazu_capture *capture) {
