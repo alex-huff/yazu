@@ -25,6 +25,7 @@ static int create_shm_file() {
 			return fd;
 		}
 	} while (retries > 0 && errno == EEXIST);
+
 	return -1;
 }
 
@@ -34,6 +35,7 @@ static int allocate_shm_file(size_t size) {
 	if (fd < 0) {
 		return -1;
 	}
+
 	int ret;
 	do {
 		ret = ftruncate(fd, size);
@@ -42,6 +44,7 @@ static int allocate_shm_file(size_t size) {
 		close(fd);
 		return -1;
 	}
+
 	return fd;
 }
 
@@ -76,16 +79,16 @@ struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 
 	data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (data == MAP_FAILED) {
-		goto error_close;
+		close(fd);
+		return NULL;
 	}
 
 	struct wl_shm_pool *pool = wl_shm_create_pool(wl_shm, fd, size);
+	assert(pool);
 	wl_buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, wl_fmt);
+	assert(wl_buffer);
 	struct yazu_buffer *buffer = calloc(1, sizeof(struct yazu_buffer));
-	if (buffer == NULL) {
-		goto error_wl_buffer_destroy;
-	}
-
+	assert(buffer);
 	buffer->width = width;
 	buffer->height = height;
 	buffer->size = size;
@@ -94,23 +97,19 @@ struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 	buffer->cairo_surface = cairo_image_surface_create_for_data(data,
 		cairo_fmt, width, height, stride);
 	buffer->cairo = cairo_create(buffer->cairo_surface);
+
 	wl_buffer_add_listener(buffer->wl_buffer, &buffer_listener, buffer);
 	wl_shm_pool_destroy(pool);
 	close(fd);
+
 	return buffer;
-error_wl_buffer_destroy:
-	wl_buffer_destroy(wl_buffer);
-	wl_shm_pool_destroy(pool);
-	munmap(data, size);
-error_close:
-	close(fd);
-	return NULL;
 }
 
 void destroy_buffer(struct yazu_buffer *buffer) {
 	if (buffer == NULL) {
 		return;
 	}
+
 	cairo_destroy(buffer->cairo);
 	cairo_surface_destroy(buffer->cairo_surface);
 	wl_buffer_destroy(buffer->wl_buffer);
@@ -130,6 +129,7 @@ struct yazu_buffer *get_available_buffer(struct wl_shm *wl_shm,
 	if (i == num_buffers) {
 		return NULL;
 	}
+
 	if (buffers[i] && (buffers[i]->width != width || buffers[i]->height != height)) {
 		destroy_buffer(buffers[i]);
 		buffers[i] = NULL;

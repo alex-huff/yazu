@@ -158,10 +158,6 @@ static const struct wl_registry_listener registry_listener = {
 static void ext_image_copy_capture_frame_handle_transform(void *data,
 		struct ext_image_copy_capture_frame_v1 *frame, uint32_t transform) {
 	struct yazu_capture *capture = data;
-	struct yazu *yazu = wl_container_of(capture, yazu, capture);
-
-	RETURN_IF_NOT_RUNNING
-
 	capture->transform = transform;
 }
 
@@ -217,10 +213,6 @@ static const struct ext_image_copy_capture_frame_v1_listener ext_image_copy_capt
 static void ext_image_copy_capture_session_handle_buffer_size(void *data,
 		struct ext_image_copy_capture_session_v1 *session, uint32_t width, uint32_t height) {
 	struct yazu_capture *capture = data;
-	struct yazu *yazu = wl_container_of(capture, yazu, capture);
-
-	RETURN_IF_NOT_RUNNING
-
 	capture->buffer_width = width;
 	capture->buffer_height = height;
 }
@@ -228,10 +220,6 @@ static void ext_image_copy_capture_session_handle_buffer_size(void *data,
 static void ext_image_copy_capture_session_handle_shm_format(void *data,
 		struct ext_image_copy_capture_session_v1 *session, uint32_t format) {
 	struct yazu_capture *capture = data;
-	struct yazu *yazu = wl_container_of(capture, yazu, capture);
-
-	RETURN_IF_NOT_RUNNING
-
 	if (capture->has_shm_format) {
 		return;
 	}
@@ -413,9 +401,6 @@ static void layer_surface_handle_configure(void *data,
 static void layer_surface_handle_closed(void *data,
 		struct zwlr_layer_surface_v1 *surface) {
 	struct yazu *yazu = data;
-
-	RETURN_IF_NOT_RUNNING
-
 	yazu->running = false;
 }
 
