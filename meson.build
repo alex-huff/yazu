@@ -8,8 +8,7 @@ srcs = ['main.c', 'buffer.c', 'pixfmt.c']
 incdir = include_directories('include')
 
 wayland_client = dependency('wayland-client')
-cairo = dependency('cairo')
-deps = [wayland_client, cairo]
+deps = [wayland_client]
 
 subdir('protocols')
 

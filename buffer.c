@@ -62,15 +62,16 @@ static const struct wl_buffer_listener buffer_listener = {
 // END BUFFER
 
 struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
-		uint32_t height, enum wl_shm_format wl_fmt,
-		cairo_format_t cairo_fmt) {
-	uint32_t stride = cairo_format_stride_for_width(cairo_fmt, width);
+		uint32_t height, enum wl_shm_format wl_fmt) {
+	// only 32-bit formats are supported for now
+	uint32_t stride = width * sizeof(uint32_t);
+
 	size_t size = stride * height;
 	if (size == 0) {
 		return NULL;
 	}
 
-	uint8_t *data = NULL;
+	void *data = NULL;
 	struct wl_buffer *wl_buffer = NULL;
 	int fd = allocate_shm_file(size);
 	if (fd < 0) {
@@ -94,9 +95,6 @@ struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 	buffer->size = size;
 	buffer->data = data;
 	buffer->wl_buffer = wl_buffer;
-	buffer->cairo_surface = cairo_image_surface_create_for_data(data,
-		cairo_fmt, width, height, stride);
-	buffer->cairo = cairo_create(buffer->cairo_surface);
 
 	wl_buffer_add_listener(buffer->wl_buffer, &buffer_listener, buffer);
 	wl_shm_pool_destroy(pool);
@@ -110,8 +108,6 @@ void destroy_buffer(struct yazu_buffer *buffer) {
 		return;
 	}
 
-	cairo_destroy(buffer->cairo);
-	cairo_surface_destroy(buffer->cairo_surface);
 	wl_buffer_destroy(buffer->wl_buffer);
 	munmap(buffer->data, buffer->size);
 	free(buffer);
@@ -135,7 +131,7 @@ struct yazu_buffer *get_available_buffer(struct wl_shm *wl_shm,
 		buffers[i] = NULL;
 	}
 	if (buffers[i] == NULL) {
-		buffers[i] = create_buffer(wl_shm, width, height, WL_SHM_FORMAT_ARGB8888, CAIRO_FORMAT_ARGB32);
+		buffers[i] = create_buffer(wl_shm, width, height, WL_SHM_FORMAT_ARGB8888);
 	}
 	return buffers[i];
 }

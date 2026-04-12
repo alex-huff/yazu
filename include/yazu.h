@@ -7,11 +7,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/param.h>
 #include <time.h>
 #include <unistd.h>
 #include <assert.h>
 #include <wayland-client.h>
-#include <cairo.h>
 
 #include "ext-image-copy-capture-v1-client-protocol.h"
 #include "ext-image-capture-source-v1-client-protocol.h"
@@ -22,11 +22,11 @@ struct yazu_capture {
 	struct ext_image_copy_capture_frame_v1 *ext_image_copy_capture_frame;
 
 	struct yazu_buffer *buffer;
+	void *padded_image;
 
 	bool has_shm_format;
 	uint8_t byte_order;
 	enum wl_shm_format shm_format;
-	cairo_format_t cairo_format;
 
 	uint32_t buffer_width, buffer_height;
 	enum wl_output_transform transform;
@@ -51,16 +51,20 @@ struct yazu {
 	struct wl_callback *surface_frame_callback;
 
 	struct yazu_buffer *buffers[2];
-
 	struct yazu_capture capture;
+	uint32_t *h_splits;
+	uint32_t *v_splits;
+	uint32_t h_splits_len;
+	uint32_t v_splits_len;
 
 	bool running;
 	bool failed;
 	bool configured;
 	bool dirty;
 
-	int32_t scale;
+	uint32_t scale;
 	uint32_t width, height;
+	double zoom_percent;
 };
 
 struct yazu_seat {

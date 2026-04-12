@@ -10,15 +10,11 @@ struct yazu_buffer {
 	void *data;
 	struct wl_buffer *wl_buffer;
 
-	cairo_surface_t *cairo_surface;
-	cairo_t *cairo;
-
 	bool busy;
 };
 
 struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
-		uint32_t height, enum wl_shm_format wl_fmt,
-		cairo_format_t cairo_fmt);
+		uint32_t height, enum wl_shm_format wl_fmt);
 
 void destroy_buffer(struct yazu_buffer *buffer);
 
