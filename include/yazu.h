@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/param.h>
+#include <linux/input-event-codes.h>
 #include <time.h>
 #include <unistd.h>
 #include <assert.h>
@@ -52,10 +53,17 @@ struct yazu {
 
 	struct yazu_buffer *buffers[2];
 	struct yazu_capture capture;
-	uint32_t *h_splits;
-	uint32_t *v_splits;
-	uint32_t h_splits_len;
-	uint32_t v_splits_len;
+	uint32_t *h_splits, *v_splits;
+	uint32_t h_splits_len, v_splits_len;
+
+	int cursor_x, cursor_y;
+	uint32_t last_button;
+	enum wl_pointer_button_state button_state;
+
+	bool dragging;
+	double capture_grab_x, capture_grab_y;
+
+	double capture_target_x, capture_target_y;
 
 	bool running;
 	bool failed;
@@ -64,7 +72,9 @@ struct yazu {
 
 	uint32_t scale;
 	uint32_t width, height;
-	double zoom_percent;
+	uint32_t buffer_width, buffer_height;
+	double half_buffer_width, half_buffer_height;
+	double zoom_scale, zoom_percent;
 };
 
 struct yazu_seat {

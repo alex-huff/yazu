@@ -12,6 +12,14 @@ static bool send_frame(struct yazu *yazu);
 
 static void resize_splits(struct yazu *yazu);
 
+static double buffer_x_to_capture_x(struct yazu *yazu, double buffer_x);
+
+static double buffer_y_to_capture_y(struct yazu *yazu, double buffer_y);
+
+static void clamp_capture_target(struct yazu *yazu);
+
+static void recompute_dimensions(struct yazu *yazu);
+
 // BEGIN POINTER
 
 static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
@@ -40,6 +48,18 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 
 	RETURN_IF_NOT_RUNNING
 
+	yazu->cursor_x = wl_fixed_to_int(surface_x) * yazu->scale;
+	yazu->cursor_y = wl_fixed_to_int(surface_y) * yazu->scale;
+	if (yazu->dragging) {
+		double cursor_x_capture_space = buffer_x_to_capture_x(yazu, yazu->cursor_x);
+		double cursor_y_capture_space = buffer_y_to_capture_y(yazu, yazu->cursor_y);
+		double cursor_grab_diff_x = yazu->capture_grab_x - cursor_x_capture_space;
+		double cursor_grab_diff_y = yazu->capture_grab_y - cursor_y_capture_space;
+		yazu->capture_target_x += cursor_grab_diff_x;
+		yazu->capture_target_y += cursor_grab_diff_y;
+		clamp_capture_target(yazu);
+		set_dirty(yazu);
+	}
 }
 
 static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
@@ -50,7 +70,25 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 
 	RETURN_IF_NOT_RUNNING
 
-	yazu->running = false;
+	yazu->button_state = button_state;
+	yazu->last_button = button;
+	switch (button) {
+	case BTN_LEFT:
+		yazu->dragging = button_state == WL_POINTER_BUTTON_STATE_PRESSED;
+		if (yazu->dragging) {
+			yazu->capture_grab_x = buffer_x_to_capture_x(yazu, yazu->cursor_x);
+			yazu->capture_grab_y = buffer_y_to_capture_y(yazu, yazu->cursor_y);
+		}
+
+		break;
+
+	case BTN_RIGHT:
+	case BTN_MIDDLE:
+	default:
+		yazu->running = false;
+
+		break;
+	}
 }
 
 static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
@@ -65,9 +103,20 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
 	}
 
 	double value = wl_fixed_to_double(fixed_value);
-	yazu->zoom_percent -= value * (yazu->zoom_percent / 100);
+	double old_zoom_percent = yazu->zoom_percent;
+	double capture_x_at_cursor = buffer_x_to_capture_x(yazu, yazu->cursor_x);
+	double capture_y_at_cursor = buffer_y_to_capture_y(yazu, yazu->cursor_y);
+	yazu->zoom_percent -= value * yazu->zoom_scale;
 	yazu->zoom_percent = MAX(100, yazu->zoom_percent);
-	set_dirty(yazu);
+	if (yazu->zoom_percent != old_zoom_percent) {
+		yazu->zoom_scale = yazu->zoom_percent / 100;
+		double new_capture_x_at_cursor = buffer_x_to_capture_x(yazu, yazu->cursor_x);
+		double new_capture_y_at_cursor = buffer_y_to_capture_y(yazu, yazu->cursor_y);
+		yazu->capture_target_x -= (new_capture_x_at_cursor - capture_x_at_cursor);
+		yazu->capture_target_y -= (new_capture_y_at_cursor - capture_y_at_cursor);
+		clamp_capture_target(yazu);
+		set_dirty(yazu);
+	}
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -232,6 +281,7 @@ static const struct ext_image_copy_capture_frame_v1_listener ext_image_copy_capt
 static void ext_image_copy_capture_session_handle_buffer_size(void *data,
 		struct ext_image_copy_capture_session_v1 *session, uint32_t width, uint32_t height) {
 	struct yazu_capture *capture = data;
+	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 
 	// We right shift the capture buffer index 5 bits so (dimension - 1)
 	// must be representable without using the top 5 bits.
@@ -239,6 +289,8 @@ static void ext_image_copy_capture_session_handle_buffer_size(void *data,
 
 	capture->buffer_width = width;
 	capture->buffer_height = height;
+	yazu->capture_target_x = capture->buffer_width / 2.0f;
+	yazu->capture_target_y = capture->buffer_height / 2.0f;
 }
 
 static void ext_image_copy_capture_session_handle_shm_format(void *data,
@@ -382,6 +434,7 @@ static void surface_handle_preferred_buffer_scale(void *data, struct wl_surface 
 	// TODO: use fractional scale
 	if (yazu->scale != scale) {
 		yazu->scale = scale;
+		recompute_dimensions(yazu);
 		set_dirty(yazu);
 	}
 }
@@ -413,8 +466,11 @@ static void layer_surface_handle_configure(void *data,
 	bool is_initial_configure = !yazu->configured;
 	bool dimensions_changed = yazu->width != width || yazu->height != height;
 	yazu->configured = true;
-	yazu->width = width;
-	yazu->height = height;
+	if (dimensions_changed) {
+		yazu->width = width;
+		yazu->height = height;
+		recompute_dimensions(yazu);
+	}
 
 	zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
 	if (!is_initial_configure) {
@@ -493,16 +549,10 @@ static void set_dirty(struct yazu *yazu) {
 
 static bool send_frame(struct yazu *yazu) {
 	struct yazu_capture *capture = &yazu->capture;
-	uint32_t buffer_width, buffer_height;
-	buffer_width = yazu->width * yazu->scale;
-	buffer_height = yazu->height * yazu->scale;
-	uint32_t capture_buffer_width, capture_buffer_height;
-	capture_buffer_width = capture->buffer_width;
-	capture_buffer_height = capture->buffer_height;
-	uint32_t padded_capture_buffer_width = capture_buffer_width + 1;
+	uint32_t padded_capture_buffer_width = capture->buffer_width + 1;
 	if (capture->frame_ready && (
-			buffer_width != capture_buffer_width ||
-			buffer_height != capture_buffer_height)) {
+			yazu->buffer_width != capture->buffer_width ||
+			yazu->buffer_height != capture->buffer_height)) {
 		// The capture dimensions should match the surface's buffer
 		// dimensions unless we try to render a frame in between a
 		// scale/transform update and a configure. If so, let's just
@@ -513,7 +563,7 @@ static bool send_frame(struct yazu *yazu) {
 		goto unset_dirty;
 	}
 
-	struct yazu_buffer *buffer = get_available_buffer(yazu->wl_shm, yazu->buffers, 2, buffer_width, buffer_height);
+	struct yazu_buffer *buffer = get_available_buffer(yazu->wl_shm, yazu->buffers, 2, yazu->buffer_width, yazu->buffer_height);
 	if (buffer == NULL) {
 		return false;
 	}
@@ -524,26 +574,16 @@ static bool send_frame(struct yazu *yazu) {
 		goto commit_surface;
 	}
 
-	double half_buffer_width, half_buffer_height;
-	half_buffer_width = buffer_width / 2.0f;
-	half_buffer_height = buffer_height / 2.0f;
-	double capture_target_x, capture_target_y;
-	capture_target_x = capture_buffer_width / 2.0f;
-	capture_target_y = capture_buffer_height / 2.0f;
-	double scale = yazu->zoom_percent / 100;
-
 	resize_splits(yazu);
 	uint32_t *h_splits = yazu->h_splits;
 	uint32_t *v_splits = yazu->v_splits;
 	uint32_t *split;
-#define buffer_x_to_capture_x(buffer_x) (capture_target_x + (buffer_x - half_buffer_width) / scale)
-#define buffer_y_to_capture_y(buffer_y) (capture_target_y + (buffer_y - half_buffer_height) / scale)
 #define compute_splits(splits, buffer_dimension, translation_func, capture_dimension) \
 	for (uint32_t i = 0; i < buffer_dimension; i++) { \
 		split = splits + i; \
 		double capture_start, capture_end; \
-		capture_start = MAX(0, translation_func(i)); \
-		capture_end = MIN(capture_dimension, translation_func(i + 1)); \
+		capture_start = MAX(0, translation_func(yazu, i)); \
+		capture_end = MIN(capture_dimension, translation_func(yazu, i + 1)); \
 		assert(capture_start < capture_end); \
 		*split = (uint32_t) floor(capture_start); \
 		assert(*split >= 0 && *split < capture_dimension); \
@@ -557,8 +597,8 @@ static bool send_frame(struct yazu *yazu) {
 			assert((*split & 0b11111u) >= 0 && (*split & 0b11111u) <= 16); \
 		} \
 	}
-	compute_splits(h_splits, buffer_width, buffer_x_to_capture_x, capture_buffer_width);
-	compute_splits(v_splits, buffer_height, buffer_y_to_capture_y, capture_buffer_height);
+	compute_splits(h_splits, yazu->buffer_width, buffer_x_to_capture_x, capture->buffer_width);
+	compute_splits(v_splits, yazu->buffer_height, buffer_y_to_capture_y, capture->buffer_height);
 
 /* #include <sys/time.h> */
 /* struct timeval tval_before, tval_after, tval_result; */
@@ -579,18 +619,18 @@ static bool send_frame(struct yazu *yazu) {
 	bool     last_v_fully_contained, last_h_fully_contained, v_fully_contained, h_fully_contained;
 	last_v_first_pixel     = -1;
 	last_v_fully_contained = false;
-	for (y = 0; y < buffer_height; y++) {
+	for (y = 0; y < yazu->buffer_height; y++) {
 		v_split           = *(v_splits + y);
 		v_first_prop      = (v_split & 0b11111u);
 		v_second_prop     = 16 - v_first_prop;
 		v_first_pixel     = v_split >> 5;
 		v_fully_contained = v_first_prop == 16;
-		buffer_row_index  = y * buffer_width;
+		buffer_row_index  = y * yazu->buffer_width;
 		if (v_fully_contained && last_v_fully_contained && v_first_pixel == last_v_first_pixel) {
 			memcpy(
 				pixels + buffer_row_index,
-				pixels + (buffer_row_index - buffer_width),
-				buffer_width * sizeof(uint32_t));
+				pixels + (buffer_row_index - yazu->buffer_width),
+				yazu->buffer_width * sizeof(uint32_t));
 
 			continue;
 		}
@@ -600,7 +640,7 @@ static bool send_frame(struct yazu *yazu) {
 		capture_row_address    = capture_pixels + v_first_pixel * (padded_capture_buffer_width);
 		last_h_first_pixel     = -1;
 		last_h_fully_contained = false;
-		for (x = 0; x < buffer_width; x++) {
+		for (x = 0; x < yazu->buffer_width; x++) {
 			h_split           = *(h_splits + x);
 			h_first_prop      = (h_split & 0b11111u);
 			h_second_prop     = 16 - h_first_prop;
@@ -635,10 +675,10 @@ static bool send_frame(struct yazu *yazu) {
 #define extract_channel(pixel, channel_num) ((pixel >> (8 * (4 - channel_num))) & 0xFFu)
 #define calculate_average_for_channel(channel_num) \
 			( \
-				extract_channel(top_left,     channel_num) * top_left_prop    + \
-				extract_channel(top_right,    channel_num) * top_right_prop   + \
-				extract_channel(bottom_left,  channel_num) * bottom_left_prop + \
-				extract_channel(bottom_right, channel_num) * bottom_right_prop \
+				top_left_prop     * extract_channel(top_left,     channel_num) + \
+				top_right_prop    * extract_channel(top_right,    channel_num) + \
+				bottom_left_prop  * extract_channel(bottom_left,  channel_num) + \
+				bottom_right_prop * extract_channel(bottom_right, channel_num) \
 			) >> 8
 			pixels[buffer_row_index + x] =
 				(calculate_average_for_channel(2) << 16) |
@@ -670,6 +710,38 @@ unset_dirty:
 	return true;
 }
 
+static void recompute_dimensions(struct yazu *yazu) {
+	yazu->buffer_width = yazu->width * yazu->scale;
+	yazu->buffer_height = yazu->height * yazu->scale;
+	yazu->half_buffer_width = yazu->buffer_width / 2.0f;
+	yazu->half_buffer_height = yazu->buffer_height / 2.0f;
+}
+
+static void clamp_capture_target(struct yazu *yazu) {
+	double buffer_top_capture_y = buffer_y_to_capture_y(yazu, 0);
+	double buffer_bottom_capture_y = buffer_y_to_capture_y(yazu, yazu->buffer_height);
+	if (buffer_top_capture_y < 0) {
+		yazu->capture_target_y -= buffer_top_capture_y;
+	} else if (buffer_bottom_capture_y > yazu->capture.buffer_height) {
+		yazu->capture_target_y -= (buffer_bottom_capture_y - yazu->capture.buffer_height);
+	}
+	double buffer_left_capture_x = buffer_x_to_capture_x(yazu, 0);
+	double buffer_right_capture_x = buffer_x_to_capture_x(yazu, yazu->buffer_width);
+	if (buffer_left_capture_x < 0) {
+		yazu->capture_target_x -= buffer_left_capture_x;
+	} else if (buffer_right_capture_x > yazu->capture.buffer_width) {
+		yazu->capture_target_x -= (buffer_right_capture_x - yazu->capture.buffer_width);
+	}
+}
+
+static double buffer_x_to_capture_x(struct yazu *yazu, double buffer_x) {
+	return yazu->capture_target_x + (buffer_x - yazu->half_buffer_width) / yazu->zoom_scale;
+}
+
+static double buffer_y_to_capture_y(struct yazu *yazu, double buffer_y) {
+	return yazu->capture_target_y + (buffer_y - yazu->half_buffer_height) / yazu->zoom_scale;
+}
+
 static void destroy_splits(struct yazu *yazu) {
 	if (yazu->v_splits) {
 		free(yazu->v_splits);
@@ -680,19 +752,17 @@ static void destroy_splits(struct yazu *yazu) {
 }
 
 static void resize_splits(struct yazu *yazu) {
-	uint32_t buffer_width = yazu->width * yazu->scale;
-	uint32_t buffer_height = yazu->height * yazu->scale;
-	if (buffer_width == yazu->h_splits_len && buffer_height == yazu->v_splits_len) {
+	if (yazu->buffer_width == yazu->h_splits_len && yazu->buffer_height == yazu->v_splits_len) {
 		return;
 	}
 
 	destroy_splits(yazu);
-	yazu->h_splits = calloc(buffer_width, sizeof(uint32_t));
+	yazu->h_splits = calloc(yazu->buffer_width, sizeof(uint32_t));
 	assert(yazu->h_splits);
-	yazu->v_splits = calloc(buffer_height, sizeof(uint32_t));
+	yazu->v_splits = calloc(yazu->buffer_height, sizeof(uint32_t));
 	assert(yazu->v_splits);
-	yazu->h_splits_len = buffer_width;
-	yazu->v_splits_len = buffer_height;
+	yazu->h_splits_len = yazu->buffer_width;
+	yazu->v_splits_len = yazu->buffer_height;
 }
 
 static void destroy_capture(struct yazu_capture *capture) {
@@ -717,7 +787,8 @@ int main(int argc, char **argv) {
 	struct yazu yazu = {
 		.running = true,
 		.scale = 1,
-		.zoom_percent = 100.f,
+		.zoom_percent = 100,
+		.zoom_scale = 1,
 	};
 	wl_list_init(&yazu.seats);
 	wl_list_init(&yazu.outputs);
