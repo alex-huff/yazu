@@ -14,16 +14,22 @@
 #include <assert.h>
 #include <wayland-client.h>
 
+#include "viewporter-client-protocol.h"
 #include "ext-image-copy-capture-v1-client-protocol.h"
 #include "ext-image-capture-source-v1-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
+
+struct yazu_mouse_sample {
+	double x;
+	double y;
+	uint32_t time;
+};
 
 struct yazu_capture {
 	struct ext_image_copy_capture_session_v1 *ext_image_copy_capture_session;
 	struct ext_image_copy_capture_frame_v1 *ext_image_copy_capture_frame;
 
 	struct yazu_buffer *buffer;
-	void *padded_image;
 
 	bool has_shm_format;
 	uint8_t byte_order;
@@ -39,6 +45,7 @@ struct yazu_capture {
 struct yazu {
 	struct wl_compositor *wl_compositor;
 	struct wl_shm *wl_shm;
+	struct wp_viewporter *wp_viewporter;
 	struct ext_image_copy_capture_manager_v1 *ext_image_copy_capture_manager;
 	struct ext_output_image_capture_source_manager_v1 *ext_output_image_capture_source_manager;
 	struct zwlr_layer_shell_v1 *layer_shell;
@@ -47,21 +54,22 @@ struct yazu {
 	struct wl_list outputs;
 
 	struct wl_surface *wl_surface;
+	struct wp_viewport *wp_viewport;
 	struct zwlr_layer_surface_v1 *layer_surface;
 
 	struct wl_callback *surface_frame_callback;
 
 	struct yazu_buffer *buffers[2];
 	struct yazu_capture capture;
-	uint32_t *h_splits, *v_splits;
-	uint32_t h_splits_len, v_splits_len;
-
-	int cursor_x, cursor_y;
-	uint32_t last_button;
-	enum wl_pointer_button_state button_state;
 
 	bool dragging;
-	double capture_grab_x, capture_grab_y;
+
+	uint32_t last_tick_time;
+	bool sliding;
+	double slide_x_acceleration;
+	double slide_y_acceleration;
+	double slide_x_velocity;
+	double slide_y_velocity;
 
 	double capture_target_x, capture_target_y;
 
@@ -82,6 +90,16 @@ struct yazu_seat {
 	struct wl_list link;
 	struct wl_seat *wl_seat;
 	struct wl_pointer *wl_pointer;
+
+	uint32_t last_button;
+	enum wl_pointer_button_state button_state;
+
+	double cursor_x, cursor_y;
+	struct wl_array motion_events;
+	double capture_grab_x, capture_grab_y;
+	bool dragging;
+
+	bool pointer_on_surface;
 };
 
 struct yazu_output {
