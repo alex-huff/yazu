@@ -5,17 +5,18 @@
 #define RETURN_IF_NOT_RUNNING if (!yazu->running) return;
 
 // milliseconds
-#define MOUSE_IS_STOPPED_THRESHOLD 50
-#define SAMPLE_IS_IRRELEVANT_THRESHOLD 100
+#define SAMPLE_IS_OLD_THRESHOLD 50
 
 // buffer space
-#define MIN_SQUARED_DISTANCE_FOR_VELOCITY_APPROXIMATION 50 * 50
+#define MIN_SQUARED_DISTANCE_FOR_VELOCITY_APPROXIMATION (10 * 10)
 
 static void setup_surface_frame_callback(struct yazu *yazu);
 
 static void set_dirty(struct yazu *yazu);
 
 static bool send_frame(struct yazu *yazu);
+
+static double real_zoom_scale(struct yazu *yazu);
 
 static double buffer_x_to_capture_x(struct yazu *yazu, double buffer_x);
 
@@ -29,7 +30,7 @@ static bool clamp_capture_target_y(struct yazu *yazu);
 
 static void recompute_dimensions(struct yazu *yazu);
 
-static void trim_irrelevant_mouse_samples(struct yazu_seat *seat, uint32_t time);
+static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time);
 
 static double squared_distance(double dx, double dy);
 
@@ -70,6 +71,7 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		yazu->capture_target_x += cursor_grab_diff_x;
 		yazu->capture_target_y += cursor_grab_diff_y;
 		clamp_capture_target(yazu);
+
 		set_dirty(yazu);
 	}
 
@@ -82,11 +84,12 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 	first->y = seat->cursor_y;
 	first->time = time;
 
-	trim_irrelevant_mouse_samples(seat, time);
+	trim_old_mouse_samples(seat, time);
 }
 
 static void handle_drag_release(struct yazu* yazu, struct yazu_seat* seat, uint32_t time) {
-	trim_irrelevant_mouse_samples(seat, time);
+	trim_old_mouse_samples(seat, time);
+
 	struct wl_array *motion_events_array = &seat->motion_events;
 	size_t num_events = motion_events_array->size / sizeof(struct yazu_mouse_sample);
 	struct yazu_mouse_sample *motion_events = motion_events_array->data;
@@ -121,25 +124,21 @@ static void handle_drag_release(struct yazu* yazu, struct yazu_seat* seat, uint3
 
 start_slide:
 	yazu->sliding = true;
-	yazu->last_tick_time = time;
+	yazu->slide_last_tick_time = time;
 
-	// buffer space velocity in pixels per millisecond
+	// buffer space pointer velocity in pixels per millisecond
 	double vx, vy;
 	vx = dx / dt;
 	vy = dy / dt;
 
-	// capture space velocity in pixels per millisecond
-	yazu->slide_x_velocity = -vx / yazu->zoom_scale;
-	yazu->slide_y_velocity = -vy / yazu->zoom_scale;
+	// capture space capture target velocity in pixels per millisecond
+	yazu->slide_x_velocity = -vx / real_zoom_scale(yazu);
+	yazu->slide_y_velocity = -vy / real_zoom_scale(yazu);
 	double slide_velocity = sqrt(
 		squared_distance(
 			yazu->slide_x_velocity,
 			yazu->slide_y_velocity));
-	/* vx / v = ax / a */
-	/* ax = a(vx / v) */
-	/* vy / v = ay / a */
-	/* ay = a(vy / v) */
-	double acceleration_magnitude = -0.01 / yazu->zoom_scale;
+	double acceleration_magnitude = -0.01 / real_zoom_scale(yazu);
 	yazu->slide_x_acceleration = acceleration_magnitude * (yazu->slide_x_velocity / slide_velocity);
 	yazu->slide_y_acceleration = acceleration_magnitude * (yazu->slide_y_velocity / slide_velocity);
 
@@ -169,6 +168,7 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 		} else if (seat->dragging && !is_pressed) {
 			yazu->dragging = false;
 			seat->dragging = false;
+
 			handle_drag_release(yazu, seat, time);
 		}
 
@@ -196,20 +196,23 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
 	}
 
 	double value = wl_fixed_to_double(fixed_value);
-	double old_zoom_percent = yazu->zoom_percent;
-	double capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
-	double capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
-	yazu->zoom_percent -= value * yazu->zoom_scale;
-	yazu->zoom_percent = MAX(100, yazu->zoom_percent);
-	if (yazu->zoom_percent != old_zoom_percent) {
-		yazu->zoom_scale = yazu->zoom_percent / 100;
-		double new_capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
-		double new_capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
-		yazu->capture_target_x -= (new_capture_x_at_cursor - capture_x_at_cursor);
-		yazu->capture_target_y -= (new_capture_y_at_cursor - capture_y_at_cursor);
-		clamp_capture_target(yazu);
-		set_dirty(yazu);
+	double old_zoom_target_percent = yazu->zoom_target_percent;
+	yazu->zoom_target_percent -= value;
+	yazu->zoom_target_percent = MAX(100, yazu->zoom_target_percent);
+	if (yazu->zoom_target_percent == old_zoom_target_percent) {
+		return;
 	}
+
+	yazu->zoom_seat = seat;
+
+	if (yazu->zooming) {
+		return;
+	}
+
+	yazu->zooming = true;
+	yazu->zoom_last_tick_time = time;
+
+	set_dirty(yazu);
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -341,6 +344,7 @@ static void ext_image_copy_capture_frame_handle_ready(void *data,
 		/* reorder_bytes(capture->buffer->data, capture->buffer->size, */
 		/* 	capture->byte_order); */
 	}
+
 	set_dirty(yazu);
 }
 
@@ -515,6 +519,7 @@ static void surface_handle_preferred_buffer_scale(void *data, struct wl_surface 
 	if (yazu->scale != scale) {
 		yazu->scale = scale;
 		recompute_dimensions(yazu);
+
 		set_dirty(yazu);
 	}
 }
@@ -662,8 +667,8 @@ static bool send_frame(struct yazu *yazu) {
 
 	wl_fixed_t viewport_x = wl_fixed_from_double(buffer_x_to_capture_x(yazu, 0));
 	wl_fixed_t viewport_y = wl_fixed_from_double(buffer_y_to_capture_y(yazu, 0));
-	wl_fixed_t viewport_width = wl_fixed_from_double(capture->buffer_width / yazu->zoom_scale);
-	wl_fixed_t viewport_height = wl_fixed_from_double(capture->buffer_height / yazu->zoom_scale);
+	wl_fixed_t viewport_width = wl_fixed_from_double(capture->buffer_width / real_zoom_scale(yazu));
+	wl_fixed_t viewport_height = wl_fixed_from_double(capture->buffer_height / real_zoom_scale(yazu));
 	wp_viewport_set_source(yazu->wp_viewport, viewport_x, viewport_y, viewport_width, viewport_height);
 	wp_viewport_set_destination(yazu->wp_viewport, yazu->width, yazu->height);
 
@@ -676,17 +681,21 @@ commit_surface:
 	wl_surface_commit(yazu->wl_surface);
 
 set_dirty:
-	yazu->dirty = yazu->sliding;
+	yazu->dirty = yazu->sliding || yazu->zooming;
 
 	return true;
 }
 
+static double real_zoom_scale(struct yazu *yazu) {
+	return pow(2, (yazu->zoom_scale - 1));
+}
+
 static double buffer_x_to_capture_x(struct yazu *yazu, double buffer_x) {
-	return yazu->capture_target_x + (buffer_x - yazu->half_buffer_width) / yazu->zoom_scale;
+	return yazu->capture_target_x + (buffer_x - yazu->half_buffer_width) / real_zoom_scale(yazu);
 }
 
 static double buffer_y_to_capture_y(struct yazu *yazu, double buffer_y) {
-	return yazu->capture_target_y + (buffer_y - yazu->half_buffer_height) / yazu->zoom_scale;
+	return yazu->capture_target_y + (buffer_y - yazu->half_buffer_height) / real_zoom_scale(yazu);
 }
 
 static bool clamp_capture_target(struct yazu *yazu) {
@@ -733,7 +742,7 @@ static void recompute_dimensions(struct yazu *yazu) {
 	yazu->half_buffer_height = yazu->buffer_height / 2.0f;
 }
 
-static void trim_irrelevant_mouse_samples(struct yazu_seat *seat, uint32_t time) {
+static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time) {
 	struct wl_array *motion_events = &seat->motion_events;
 
 	struct yazu_mouse_sample *mouse_sample;
@@ -741,7 +750,7 @@ static void trim_irrelevant_mouse_samples(struct yazu_seat *seat, uint32_t time)
 	for (size_t i = 0; i < motion_events->size; i += sizeof(struct yazu_mouse_sample)) {
 		mouse_sample = motion_events->data + i;
 		elapsed_time = time - mouse_sample->time;
-		if (elapsed_time > SAMPLE_IS_IRRELEVANT_THRESHOLD) {
+		if (elapsed_time > SAMPLE_IS_OLD_THRESHOLD) {
 			motion_events->size = i;
 
 			break;
@@ -753,7 +762,7 @@ static double squared_distance(double dx, double dy) {
 	return dx * dx + dy * dy;
 }
 
-static void process_animations(struct yazu *yazu, uint32_t time) {
+static void process_sliding(struct yazu *yazu, uint32_t time) {
 	if (!yazu->sliding) {
 		return;
 	}
@@ -764,8 +773,11 @@ static void process_animations(struct yazu *yazu, uint32_t time) {
 	double initial_vx, initial_vy;
 	double current_vx, current_vy;
 	double stop_dt_x, stop_dt_y;
+	bool clamped_x, clamped_y;
+	bool sliding_on_x, sliding_on_y;
 
-	dt = time - yazu->last_tick_time;
+	// TODO: extract this into macro and run once for x and y
+	dt = time - yazu->slide_last_tick_time;
 	assert(dt >= 0);
 	ax = yazu->slide_x_acceleration;
 	ay = yazu->slide_y_acceleration;
@@ -798,10 +810,10 @@ static void process_animations(struct yazu *yazu, uint32_t time) {
 	yazu->capture_target_y += dy;
 	yazu->slide_x_velocity = current_vx;
 	yazu->slide_y_velocity = current_vy;
-	yazu->last_tick_time = time;
+	yazu->slide_last_tick_time = time;
 
-	bool clamped_x = clamp_capture_target_x(yazu);
-	bool clamped_y = clamp_capture_target_y(yazu);
+	clamped_x = clamp_capture_target_x(yazu);
+	clamped_y = clamp_capture_target_y(yazu);
 	if (clamped_x) {
 		yazu->slide_x_velocity = 0;
 		yazu->slide_x_acceleration = 0;
@@ -810,13 +822,75 @@ static void process_animations(struct yazu *yazu, uint32_t time) {
 		yazu->slide_y_velocity = 0;
 		yazu->slide_y_acceleration = 0;
 	}
-	if (
-			yazu->slide_x_velocity == 0 &&
-			yazu->slide_x_acceleration == 0 &&
-			yazu->slide_y_velocity == 0 &&
-			yazu->slide_y_acceleration == 0) {
+	sliding_on_x = yazu->slide_x_velocity != 0 || yazu->slide_x_acceleration != 0;
+	sliding_on_y = yazu->slide_y_velocity != 0 || yazu->slide_y_acceleration != 0;
+	if (!sliding_on_x && !sliding_on_y) {
 		yazu->sliding = false;
 	}
+}
+
+static void process_zooming(struct yazu *yazu, uint32_t time) {
+	if (!yazu->zooming) {
+		return;
+	}
+
+	uint32_t dt;
+	struct yazu_seat *seat;
+	double capture_x_at_cursor, capture_y_at_cursor;
+	double new_capture_x_at_cursor, new_capture_y_at_cursor;
+	double time_scale;
+	double last_tick_scaled_time;
+	double scaled_time;
+	double offset_time;
+	double coefficient;
+
+	dt = time - yazu->zoom_last_tick_time;
+	assert(dt >= 0);
+	seat = yazu->zoom_seat;
+	capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
+	capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
+	time_scale = 40;
+	last_tick_scaled_time = yazu->zoom_last_tick_time / time_scale;
+	scaled_time = time / time_scale;
+
+	/* y = x^2 */
+	/* zoom_percent = t^2 */
+	/* zoom_percent = t^2 + zoom_target_percent */
+	/* zoom_percent = (zoom_last_tick_time - o)^2 + zoom_target_percent */
+	/* zoom_percent - zoom_target_percent = (zoom_last_tick_time - o)^2 */
+	/* -sqrt(zoom_percent - zoom_target_percent) = zoom_last_tick_time - o */
+	/* -sqrt(zoom_percent - zoom_target_percent) - zoom_last_tick_time = -o */
+	/* o = sqrt(zoom_percent - zoom_target_percent) + zoom_last_tick_time */
+
+	double stop_time = sqrt(fabs(yazu->zoom_percent - yazu->zoom_target_percent)) + last_tick_scaled_time;
+	offset_time = scaled_time - stop_time;
+	if (offset_time >= 0) {
+		yazu->zoom_percent = yazu->zoom_target_percent;
+
+		goto set_scale;
+	}
+
+	coefficient = (yazu->zoom_target_percent - yazu->zoom_percent > 0) ? -1 : 1;
+	yazu->zoom_percent = coefficient * (offset_time * offset_time) + yazu->zoom_target_percent;
+
+set_scale:
+	yazu->zoom_scale = yazu->zoom_percent / 100;
+	yazu->zoom_last_tick_time = time;
+
+	new_capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
+	new_capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
+	yazu->capture_target_x -= (new_capture_x_at_cursor - capture_x_at_cursor);
+	yazu->capture_target_y -= (new_capture_y_at_cursor - capture_y_at_cursor);
+	clamp_capture_target(yazu);
+
+	if (yazu->zoom_percent == yazu->zoom_target_percent) {
+		yazu->zooming = false;
+	}
+}
+
+static void process_animations(struct yazu *yazu, uint32_t time) {
+	process_zooming(yazu, time);
+	process_sliding(yazu, time);
 }
 
 static void destroy_capture(struct yazu_capture *capture) {
@@ -839,6 +913,7 @@ int main(int argc, char **argv) {
 		.running = true,
 		.scale = 1,
 		.zoom_percent = 100,
+		.zoom_target_percent = 100,
 		.zoom_scale = 1,
 	};
 	wl_list_init(&yazu.seats);
@@ -889,7 +964,7 @@ int main(int argc, char **argv) {
 		ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
 		ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
 	zwlr_layer_surface_v1_set_keyboard_interactivity(yazu.layer_surface,
-		0);
+		1);
 	zwlr_layer_surface_v1_set_exclusive_zone(yazu.layer_surface, -1);
 	zwlr_layer_surface_v1_add_listener(yazu.layer_surface,
 		&layer_surface_listener, &yazu);

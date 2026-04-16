@@ -64,12 +64,18 @@ struct yazu {
 
 	bool dragging;
 
-	uint32_t last_tick_time;
+
 	bool sliding;
+	uint32_t slide_last_tick_time;
 	double slide_x_acceleration;
 	double slide_y_acceleration;
 	double slide_x_velocity;
 	double slide_y_velocity;
+
+	bool zooming;
+	uint32_t zoom_last_tick_time;
+	double zoom_target_percent;
+	struct yazu_seat *zoom_seat;
 
 	double capture_target_x, capture_target_y;
 
