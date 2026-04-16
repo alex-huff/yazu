@@ -7,9 +7,6 @@
 // milliseconds
 #define SAMPLE_IS_OLD_THRESHOLD 50
 
-// buffer space
-#define MIN_SQUARED_DISTANCE_FOR_VELOCITY_APPROXIMATION (10 * 10)
-
 static void setup_surface_frame_callback(struct yazu *yazu);
 
 static void set_dirty(struct yazu *yazu);
@@ -94,35 +91,23 @@ static void handle_drag_release(struct yazu* yazu, struct yazu_seat* seat, uint3
 	size_t num_events = motion_events_array->size / sizeof(struct yazu_mouse_sample);
 	struct yazu_mouse_sample *motion_events = motion_events_array->data;
 
-	// most recent mouse sample
-	uint32_t last_time = motion_events[0].time;
-	double last_x = motion_events[0].x;
-	double last_y = motion_events[0].y;
+	struct yazu_mouse_sample *first, *last;
+	first = motion_events + (num_events - 1);
+	last = motion_events;
 
-	uint32_t c_time;
-	double cx, cy;
-	uint32_t dt;
-	double dx, dy;
-	double squared_distance_from_last_sample;
-	for (size_t i = 1; i < num_events; i++) {
-		c_time = motion_events[i].time;
-		cx = motion_events[i].x;
-		cy = motion_events[i].y;
-		dx = last_x - cx;
-		dy = last_y - cy;
-		assert(last_time >= c_time);
-		dt = last_time - c_time;
-		squared_distance_from_last_sample = squared_distance(dx, dy);
-		if (
-				dt > 0 &&
-				squared_distance_from_last_sample >= MIN_SQUARED_DISTANCE_FOR_VELOCITY_APPROXIMATION) {
-			goto start_slide;
-		}
+	uint32_t dt = last->time - first->time;
+	if (dt <= 0) {
+		return;
 	}
 
-	return;
+	double dx, dy;
+	dx = last->x - first->x;
+	dy = last->y - first->y;
 
-start_slide:
+	if (dx == 0 || dy == 0) {
+		return;
+	}
+
 	yazu->sliding = true;
 	yazu->slide_last_tick_time = time;
 
@@ -139,8 +124,10 @@ start_slide:
 			yazu->slide_x_velocity,
 			yazu->slide_y_velocity));
 	double acceleration_magnitude = -0.01 / real_zoom_scale(yazu);
-	yazu->slide_x_acceleration = acceleration_magnitude * (yazu->slide_x_velocity / slide_velocity);
-	yazu->slide_y_acceleration = acceleration_magnitude * (yazu->slide_y_velocity / slide_velocity);
+	yazu->slide_x_acceleration =
+		acceleration_magnitude * (yazu->slide_x_velocity / slide_velocity);
+	yazu->slide_y_acceleration =
+		acceleration_magnitude * (yazu->slide_y_velocity / slide_velocity);
 
 	set_dirty(yazu);
 }
@@ -842,6 +829,7 @@ static void process_zooming(struct yazu *yazu, uint32_t time) {
 	double time_scale;
 	double last_tick_scaled_time;
 	double scaled_time;
+	double stop_time;
 	double offset_time;
 	double coefficient;
 
@@ -863,7 +851,7 @@ static void process_zooming(struct yazu *yazu, uint32_t time) {
 	/* -sqrt(zoom_percent - zoom_target_percent) - zoom_last_tick_time = -o */
 	/* o = sqrt(zoom_percent - zoom_target_percent) + zoom_last_tick_time */
 
-	double stop_time = sqrt(fabs(yazu->zoom_percent - yazu->zoom_target_percent)) + last_tick_scaled_time;
+	stop_time = sqrt(fabs(yazu->zoom_percent - yazu->zoom_target_percent)) + last_tick_scaled_time;
 	offset_time = scaled_time - stop_time;
 	if (offset_time >= 0) {
 		yazu->zoom_percent = yazu->zoom_target_percent;
