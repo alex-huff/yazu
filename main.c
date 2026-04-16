@@ -764,7 +764,6 @@ static void process_sliding(struct yazu *yazu, uint32_t time) {
 	bool clamped_x, clamped_y;
 	bool sliding_on_x, sliding_on_y;
 
-	// TODO: extract this into macro and run once for x and y
 	dt = time - yazu->slide_last_tick_time;
 	assert(dt >= 0);
 	ax = yazu->slide_x_acceleration;
@@ -773,8 +772,16 @@ static void process_sliding(struct yazu *yazu, uint32_t time) {
 	initial_vy = yazu->slide_y_velocity;
 	current_vx = initial_vx + ax * dt;
 	current_vy = initial_vy + ay * dt;
-	stop_dt_x = -initial_vx / ax;
-	stop_dt_y = -initial_vy / ay;
+	if (ax != 0) {
+		stop_dt_x = -initial_vx / ax;
+	} else {
+		stop_dt_x = UINT32_MAX;
+	}
+	if (ay != 0) {
+		stop_dt_y = -initial_vy / ay;
+	} else {
+		stop_dt_y = UINT32_MAX;
+	}
 	if (dt >= stop_dt_x) {
 		current_vx = 0;
 		yazu->slide_x_acceleration = 0;
@@ -786,12 +793,12 @@ static void process_sliding(struct yazu *yazu, uint32_t time) {
 	if (ax != 0) {
 		dx = (current_vx * current_vx - initial_vx * initial_vx) / (2 * ax);
 	} else {
-		dx = 0;
+		dx = initial_vx * dt;
 	}
 	if (ay != 0) {
 		dy = (current_vy * current_vy - initial_vy * initial_vy) / (2 * ay);
 	} else {
-		dy = 0;
+		dy = initial_vy * dt;
 	}
 
 	yazu->capture_target_x += dx;
