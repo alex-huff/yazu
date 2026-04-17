@@ -750,6 +750,66 @@ static double squared_distance(double dx, double dy) {
 	return dx * dx + dy * dy;
 }
 
+static void process_zooming(struct yazu *yazu, uint32_t time) {
+	if (!yazu->zooming) {
+		return;
+	}
+
+	uint32_t dt;
+	struct yazu_seat *seat;
+	double capture_x_at_cursor, capture_y_at_cursor;
+	double new_capture_x_at_cursor, new_capture_y_at_cursor;
+	double time_scale;
+	double last_tick_scaled_time;
+	double scaled_time;
+	double stop_time;
+	double offset_time;
+	double coefficient;
+
+	dt = time - yazu->zoom_last_tick_time;
+	assert(dt >= 0);
+	seat = yazu->zoom_seat;
+	capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
+	capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
+	time_scale = 40;
+	last_tick_scaled_time = yazu->zoom_last_tick_time / time_scale;
+	scaled_time = time / time_scale;
+
+	/* y = x^2 */
+	/* zoom_percent = t^2 */
+	/* zoom_percent = t^2 + zoom_target_percent */
+	/* zoom_percent = (zoom_last_tick_time - o)^2 + zoom_target_percent */
+	/* zoom_percent - zoom_target_percent = (zoom_last_tick_time - o)^2 */
+	/* -sqrt(zoom_percent - zoom_target_percent) = zoom_last_tick_time - o */
+	/* -sqrt(zoom_percent - zoom_target_percent) - zoom_last_tick_time = -o */
+	/* o = sqrt(zoom_percent - zoom_target_percent) + zoom_last_tick_time */
+
+	stop_time = sqrt(fabs(yazu->zoom_percent - yazu->zoom_target_percent)) + last_tick_scaled_time;
+	offset_time = scaled_time - stop_time;
+	if (offset_time >= 0) {
+		yazu->zoom_percent = yazu->zoom_target_percent;
+
+		goto set_scale;
+	}
+
+	coefficient = (yazu->zoom_target_percent - yazu->zoom_percent > 0) ? -1 : 1;
+	yazu->zoom_percent = coefficient * (offset_time * offset_time) + yazu->zoom_target_percent;
+
+set_scale:
+	yazu->zoom_scale = yazu->zoom_percent / 100;
+	yazu->zoom_last_tick_time = time;
+
+	new_capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
+	new_capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
+	yazu->capture_target_x -= (new_capture_x_at_cursor - capture_x_at_cursor);
+	yazu->capture_target_y -= (new_capture_y_at_cursor - capture_y_at_cursor);
+	clamp_capture_target(yazu);
+
+	if (yazu->zoom_percent == yazu->zoom_target_percent) {
+		yazu->zooming = false;
+	}
+}
+
 static void process_sliding(struct yazu *yazu, uint32_t time) {
 	if (!yazu->sliding) {
 		return;
@@ -821,66 +881,6 @@ static void process_sliding(struct yazu *yazu, uint32_t time) {
 	sliding_on_y = yazu->slide_y_velocity != 0 || yazu->slide_y_acceleration != 0;
 	if (!sliding_on_x && !sliding_on_y) {
 		yazu->sliding = false;
-	}
-}
-
-static void process_zooming(struct yazu *yazu, uint32_t time) {
-	if (!yazu->zooming) {
-		return;
-	}
-
-	uint32_t dt;
-	struct yazu_seat *seat;
-	double capture_x_at_cursor, capture_y_at_cursor;
-	double new_capture_x_at_cursor, new_capture_y_at_cursor;
-	double time_scale;
-	double last_tick_scaled_time;
-	double scaled_time;
-	double stop_time;
-	double offset_time;
-	double coefficient;
-
-	dt = time - yazu->zoom_last_tick_time;
-	assert(dt >= 0);
-	seat = yazu->zoom_seat;
-	capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
-	capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
-	time_scale = 40;
-	last_tick_scaled_time = yazu->zoom_last_tick_time / time_scale;
-	scaled_time = time / time_scale;
-
-	/* y = x^2 */
-	/* zoom_percent = t^2 */
-	/* zoom_percent = t^2 + zoom_target_percent */
-	/* zoom_percent = (zoom_last_tick_time - o)^2 + zoom_target_percent */
-	/* zoom_percent - zoom_target_percent = (zoom_last_tick_time - o)^2 */
-	/* -sqrt(zoom_percent - zoom_target_percent) = zoom_last_tick_time - o */
-	/* -sqrt(zoom_percent - zoom_target_percent) - zoom_last_tick_time = -o */
-	/* o = sqrt(zoom_percent - zoom_target_percent) + zoom_last_tick_time */
-
-	stop_time = sqrt(fabs(yazu->zoom_percent - yazu->zoom_target_percent)) + last_tick_scaled_time;
-	offset_time = scaled_time - stop_time;
-	if (offset_time >= 0) {
-		yazu->zoom_percent = yazu->zoom_target_percent;
-
-		goto set_scale;
-	}
-
-	coefficient = (yazu->zoom_target_percent - yazu->zoom_percent > 0) ? -1 : 1;
-	yazu->zoom_percent = coefficient * (offset_time * offset_time) + yazu->zoom_target_percent;
-
-set_scale:
-	yazu->zoom_scale = yazu->zoom_percent / 100;
-	yazu->zoom_last_tick_time = time;
-
-	new_capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
-	new_capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
-	yazu->capture_target_x -= (new_capture_x_at_cursor - capture_x_at_cursor);
-	yazu->capture_target_y -= (new_capture_y_at_cursor - capture_y_at_cursor);
-	clamp_capture_target(yazu);
-
-	if (yazu->zoom_percent == yazu->zoom_target_percent) {
-		yazu->zooming = false;
 	}
 }
 
