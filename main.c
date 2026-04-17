@@ -411,13 +411,14 @@ static void ext_image_copy_capture_session_handle_done(void *data,
 	capture->capture_started = true;
 	if (!capture->has_shm_format) {
 		fprintf(stderr, "no supported format found for output frame\n");
-		yazu->failed = true;
-		yazu->running = false;
-		return;
+
+		goto error;
 	}
 
 	capture->buffer = create_buffer(yazu->wl_shm, capture->buffer_width, capture->buffer_height, capture->shm_format);
 	if (capture->buffer == NULL) {
+		fprintf(stderr, "failed to create buffer for output frame\n");
+
 		goto error;
 	}
 
@@ -435,7 +436,6 @@ static void ext_image_copy_capture_session_handle_done(void *data,
 	return;
 
 error:
-	fprintf(stderr, "failed to create buffer for output frame\n");
 	yazu->failed = true;
 	yazu->running = false;
 	return;
@@ -788,14 +788,10 @@ static void process_zooming(struct yazu *yazu, uint32_t time) {
 	offset_time = scaled_time - stop_time;
 	if (offset_time >= 0) {
 		yazu->zoom_percent = yazu->zoom_target_percent;
-
-		goto set_scale;
+	} else {
+		coefficient = (yazu->zoom_target_percent - yazu->zoom_percent > 0) ? -1 : 1;
+		yazu->zoom_percent = coefficient * (offset_time * offset_time) + yazu->zoom_target_percent;
 	}
-
-	coefficient = (yazu->zoom_target_percent - yazu->zoom_percent > 0) ? -1 : 1;
-	yazu->zoom_percent = coefficient * (offset_time * offset_time) + yazu->zoom_target_percent;
-
-set_scale:
 	yazu->zoom_scale = yazu->zoom_percent / 100;
 	yazu->zoom_last_tick_time = time;
 
