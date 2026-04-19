@@ -15,6 +15,7 @@
 #include <wayland-client.h>
 
 #include "viewporter-client-protocol.h"
+#include "cursor-shape-v1-client-protocol.h"
 #include "ext-image-copy-capture-v1-client-protocol.h"
 #include "ext-image-capture-source-v1-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -46,9 +47,10 @@ struct yazu {
 	struct wl_compositor *wl_compositor;
 	struct wl_shm *wl_shm;
 	struct wp_viewporter *wp_viewporter;
+	struct wp_cursor_shape_manager_v1 *wp_cursor_shape_manager;
 	struct ext_image_copy_capture_manager_v1 *ext_image_copy_capture_manager;
 	struct ext_output_image_capture_source_manager_v1 *ext_output_image_capture_source_manager;
-	struct zwlr_layer_shell_v1 *layer_shell;
+	struct zwlr_layer_shell_v1 *zwlr_layer_shell;
 
 	struct wl_list seats;
 	struct wl_list outputs;
@@ -96,6 +98,7 @@ struct yazu_seat {
 	struct wl_list link;
 	struct wl_seat *wl_seat;
 	struct wl_pointer *wl_pointer;
+	struct wp_cursor_shape_device_v1 *wp_cursor_shape_device;
 
 	uint32_t last_button;
 	enum wl_pointer_button_state button_state;

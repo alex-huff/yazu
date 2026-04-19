@@ -33,14 +33,31 @@ static double squared_distance(double dx, double dy);
 
 static void process_animations(struct yazu *yazu, uint32_t time);
 
+static void destroy_pointer(struct yazu_seat *yazu_seat);
+
 // BEGIN POINTER
+
+static void pointer_set_shape(struct yazu *yazu, struct yazu_seat *seat,
+		struct wl_pointer *wl_pointer, uint32_t serial) {
+	enum wp_cursor_shape_device_v1_shape shape =
+		yazu->dragging ?
+		WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING :
+		WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB;
+	wp_cursor_shape_device_v1_set_shape(seat->wp_cursor_shape_device,
+		serial, shape);
+}
 
 static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 		uint32_t serial, struct wl_surface *surface,
 		wl_fixed_t surface_x, wl_fixed_t surface_y) {
 	struct yazu_seat *seat = data;
+	struct yazu *yazu = seat->yazu;
 	assert(!seat->pointer_on_surface);
+
+	RETURN_IF_NOT_RUNNING
+
 	seat->pointer_on_surface = true;
+	pointer_set_shape(yazu, seat, wl_pointer, serial);
 }
 
 static void pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
@@ -152,11 +169,14 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 			seat->dragging = true;
 			seat->capture_grab_x = buffer_x_to_capture_x(yazu, seat->cursor_x);
 			seat->capture_grab_y = buffer_y_to_capture_y(yazu, seat->cursor_y);
+
+			pointer_set_shape(yazu, seat, wl_pointer, serial);
 		} else if (seat->dragging && !is_pressed) {
 			yazu->dragging = false;
 			seat->dragging = false;
 
 			handle_drag_release(yazu, seat, time);
+			pointer_set_shape(yazu, seat, wl_pointer, serial);
 		}
 
 		break;
@@ -223,9 +243,15 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 	RETURN_IF_NOT_RUNNING
 
 	if (capabilities & WL_SEAT_CAPABILITY_POINTER) {
+		destroy_pointer(seat);
 		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
 		assert(seat->wl_pointer);
 		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
+		seat->wp_cursor_shape_device =
+			wp_cursor_shape_manager_v1_get_pointer(
+				yazu->wp_cursor_shape_manager,
+				seat->wl_pointer);
+		assert(seat->wp_cursor_shape_device);
 	}
 }
 
@@ -274,6 +300,10 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		yazu->wp_viewporter = wl_registry_bind(wl_registry, name,
 			&wp_viewporter_interface, 1);
 		assert(yazu->wp_viewporter);
+	} else if (strcmp(interface, wp_cursor_shape_manager_v1_interface.name) == 0) {
+		yazu->wp_cursor_shape_manager = wl_registry_bind(wl_registry,
+			name, &wp_cursor_shape_manager_v1_interface, 1);
+		assert(yazu->wp_cursor_shape_manager);
 	} else if (strcmp(interface, ext_image_copy_capture_manager_v1_interface.name) == 0) {
 		yazu->ext_image_copy_capture_manager = wl_registry_bind(
 			wl_registry, name,
@@ -285,9 +315,9 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 			&ext_output_image_capture_source_manager_v1_interface, 1);
 		assert(yazu->ext_output_image_capture_source_manager);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
-		yazu->layer_shell = wl_registry_bind(wl_registry, name,
+		yazu->zwlr_layer_shell = wl_registry_bind(wl_registry, name,
 			&zwlr_layer_shell_v1_interface, 3);
-		assert(yazu->layer_shell);
+		assert(yazu->zwlr_layer_shell);
 	}
 }
 
@@ -885,6 +915,16 @@ static void process_animations(struct yazu *yazu, uint32_t time) {
 	process_sliding(yazu, time);
 }
 
+
+static void destroy_pointer(struct yazu_seat *seat) {
+	if (seat->wl_pointer) {
+		wl_pointer_destroy(seat->wl_pointer);
+	}
+	if (seat->wp_cursor_shape_device) {
+		wp_cursor_shape_device_v1_destroy(seat->wp_cursor_shape_device);
+	}
+}
+
 static void destroy_capture(struct yazu_capture *capture) {
 	if (capture->ext_image_copy_capture_frame) {
 		ext_image_copy_capture_frame_v1_destroy(capture->ext_image_copy_capture_frame);
@@ -918,30 +958,18 @@ int main(int argc, char **argv) {
 	wl_display_roundtrip(display);
 
 	bool ret_code = EXIT_FAILURE;
-	if (yazu.wl_compositor == NULL) {
-		fprintf(stderr, "compositor doesn't support wl_compositor\n");
-		goto cleanup_bindings;
+#define verify_global_object_exists(object_name) \
+	if (yazu.object_name == NULL) { \
+		fprintf(stderr, "compositor doesn't support " #object_name "\n"); \
+		goto cleanup_bindings; \
 	}
-	if (yazu.wl_shm == NULL) {
-		fprintf(stderr, "compositor doesn't support wl_shm\n");
-		goto cleanup_bindings;
-	}
-	if (yazu.wp_viewporter == NULL) {
-		fprintf(stderr, "compositor doesn't support wp_viewporter\n");
-		goto cleanup_bindings;
-	}
-	if (yazu.ext_image_copy_capture_manager == NULL) {
-		fprintf(stderr, "compositor doesn't support ext-image-copy-capture\n");
-		goto cleanup_bindings;
-	}
-	if (yazu.ext_output_image_capture_source_manager == NULL) {
-		fprintf(stderr, "compositor doesn't support ext-output-image-capture-source\n");
-		goto cleanup_bindings;
-	}
-	if (yazu.layer_shell == NULL) {
-		fprintf(stderr, "compositor doesn't support zwlr_layer_shell_v1\n");
-		goto cleanup_bindings;
-	}
+	verify_global_object_exists(wl_compositor);
+	verify_global_object_exists(wl_shm);
+	verify_global_object_exists(wp_viewporter);
+	verify_global_object_exists(wp_cursor_shape_manager);
+	verify_global_object_exists(ext_image_copy_capture_manager);
+	verify_global_object_exists(ext_output_image_capture_source_manager);
+	verify_global_object_exists(zwlr_layer_shell);
 
 	yazu.wl_surface = wl_compositor_create_surface(yazu.wl_compositor);
 	assert(yazu.wl_surface);
@@ -949,7 +977,7 @@ int main(int argc, char **argv) {
 	assert(yazu.wp_viewport);
 	wl_surface_add_listener(yazu.wl_surface, &surface_listener, &yazu);
 	yazu.layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-		yazu.layer_shell, yazu.wl_surface, NULL,
+		yazu.zwlr_layer_shell, yazu.wl_surface, NULL,
 		ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "zoom");
 	assert(yazu.layer_surface);
 	zwlr_layer_surface_v1_set_anchor(yazu.layer_surface,
@@ -979,22 +1007,18 @@ int main(int argc, char **argv) {
 	}
 
 cleanup_bindings:
-	if (yazu.layer_shell) {
-		zwlr_layer_shell_v1_destroy(yazu.layer_shell);
+#define destroy_global_object_if_exists(object_name, version_id) \
+	if (yazu.object_name) { \
+		object_name ## version_id ## _destroy(yazu.object_name); \
 	}
-	if (yazu.ext_output_image_capture_source_manager) {
-		ext_output_image_capture_source_manager_v1_destroy(yazu.ext_output_image_capture_source_manager);
-	}
-	if (yazu.ext_image_copy_capture_manager) {
-		ext_image_copy_capture_manager_v1_destroy(yazu.ext_image_copy_capture_manager);
-	}
+	destroy_global_object_if_exists(zwlr_layer_shell, _v1);
+	destroy_global_object_if_exists(ext_output_image_capture_source_manager, _v1);
+	destroy_global_object_if_exists(ext_image_copy_capture_manager, _v1);
 	struct yazu_seat *seat, *seat_tmp;
 	wl_list_for_each_safe(seat, seat_tmp, &yazu.seats, link) {
 		wl_list_remove(&seat->link);
 		wl_array_release(&seat->motion_events);
-		if (seat->wl_pointer) {
-			wl_pointer_destroy(seat->wl_pointer);
-		}
+		destroy_pointer(seat);
 		wl_seat_destroy(seat->wl_seat);
 		free(seat);
 	}
@@ -1004,15 +1028,10 @@ cleanup_bindings:
 		wl_output_destroy(output->wl_output);
 		free(output);
 	}
-	if (yazu.wp_viewporter) {
-		wp_viewporter_destroy(yazu.wp_viewporter);
-	}
-	if (yazu.wl_shm) {
-		wl_shm_destroy(yazu.wl_shm);
-	}
-	if (yazu.wl_compositor) {
-		wl_compositor_destroy(yazu.wl_compositor);
-	}
+	destroy_global_object_if_exists(wp_viewporter,);
+	destroy_global_object_if_exists(wp_cursor_shape_manager, _v1);
+	destroy_global_object_if_exists(wl_shm,);
+	destroy_global_object_if_exists(wl_compositor,);
 	wl_registry_destroy(wl_registry);
 
 	// ensure all queued requests have been received by server
