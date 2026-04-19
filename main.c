@@ -242,8 +242,8 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 
 	RETURN_IF_NOT_RUNNING
 
-	if (capabilities & WL_SEAT_CAPABILITY_POINTER) {
-		destroy_pointer(seat);
+	bool has_pointer = capabilities & WL_SEAT_CAPABILITY_POINTER;
+	if (seat->wl_pointer == NULL && has_pointer) {
 		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
 		assert(seat->wl_pointer);
 		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
@@ -252,6 +252,8 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 				yazu->wp_cursor_shape_manager,
 				seat->wl_pointer);
 		assert(seat->wp_cursor_shape_device);
+	} else if (seat->wl_pointer && !has_pointer) {
+		destroy_pointer(seat);
 	}
 }
 
