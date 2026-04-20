@@ -33,7 +33,6 @@ struct yazu_capture {
 	struct yazu_buffer *buffer;
 
 	bool has_shm_format;
-	uint8_t byte_order;
 	enum wl_shm_format shm_format;
 
 	uint32_t buffer_width, buffer_height;
@@ -51,6 +50,8 @@ struct yazu {
 	struct ext_image_copy_capture_manager_v1 *ext_image_copy_capture_manager;
 	struct ext_output_image_capture_source_manager_v1 *ext_output_image_capture_source_manager;
 	struct zwlr_layer_shell_v1 *zwlr_layer_shell;
+
+	struct wl_array compositor_supported_shm_formats;
 
 	struct wl_list seats;
 	struct wl_list outputs;
@@ -86,7 +87,7 @@ struct yazu {
 	bool configured;
 	bool dirty;
 
-	uint32_t scale;
+	double scale_x, scale_y;
 	uint32_t width, height;
 	uint32_t buffer_width, buffer_height;
 	double half_buffer_width, half_buffer_height;

@@ -1,8 +1,5 @@
 #include "yazu.h"
 #include "buffer.h"
-#include "pixfmt.h"
-
-#define RETURN_IF_NOT_RUNNING if (!yazu->running) return;
 
 // milliseconds
 #define SAMPLE_IS_OLD_THRESHOLD 50
@@ -33,6 +30,8 @@ static double squared_distance(double dx, double dy);
 
 static void process_animations(struct yazu *yazu, uint32_t time);
 
+static bool approximately_equals(double a, double b);
+
 static void destroy_pointer(struct yazu_seat *yazu_seat);
 
 // BEGIN POINTER
@@ -53,9 +52,6 @@ static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(!seat->pointer_on_surface);
-
-	RETURN_IF_NOT_RUNNING
-
 	seat->pointer_on_surface = true;
 	pointer_set_shape(yazu, seat, wl_pointer, serial);
 }
@@ -72,11 +68,8 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
-
-	RETURN_IF_NOT_RUNNING
-
-	seat->cursor_x = wl_fixed_to_double(surface_x) * yazu->scale;
-	seat->cursor_y = wl_fixed_to_double(surface_y) * yazu->scale;
+	seat->cursor_x = wl_fixed_to_double(surface_x) * yazu->scale_x;
+	seat->cursor_y = wl_fixed_to_double(surface_y) * yazu->scale_y;
 	if (seat->dragging) {
 		double cursor_x_capture_space = buffer_x_to_capture_x(yazu, seat->cursor_x);
 		double cursor_y_capture_space = buffer_y_to_capture_y(yazu, seat->cursor_y);
@@ -155,9 +148,6 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
-
-	RETURN_IF_NOT_RUNNING
-
 	seat->button_state = button_state;
 	seat->last_button = button;
 	switch (button) {
@@ -196,9 +186,6 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
-
-	RETURN_IF_NOT_RUNNING
-
 	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) {
 		return;
 	}
@@ -239,9 +226,6 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 		uint32_t capabilities) {
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
-
-	RETURN_IF_NOT_RUNNING
-
 	bool has_pointer = capabilities & WL_SEAT_CAPABILITY_POINTER;
 	if (seat->wl_pointer == NULL && has_pointer) {
 		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
@@ -263,14 +247,31 @@ static const struct wl_seat_listener seat_listener = {
 
 // END SEAT
 
+// BEGIN SHM
+
+static void shm_handle_format(void *data, struct wl_shm *wl_shm,
+		uint32_t format) {
+	struct yazu *yazu = data;
+	struct wl_array *shm_formats_array = &yazu->compositor_supported_shm_formats;
+	wl_array_add(shm_formats_array, sizeof(enum wl_shm_format));
+	size_t num_formats = shm_formats_array->size / sizeof(enum wl_shm_format);
+	enum wl_shm_format *last =
+		((enum wl_shm_format *) shm_formats_array->data) +
+		(num_formats - 1);
+	*last = format;
+}
+
+static const struct wl_shm_listener shm_listener = {
+	.format = shm_handle_format,
+};
+
+// END SHM
+
 // BEGIN REGISTRY
 
 static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		uint32_t name, const char *interface, uint32_t version) {
 	struct yazu *yazu = data;
-
-	RETURN_IF_NOT_RUNNING
-
 	if (strcmp(interface, wl_compositor_interface.name) == 0) {
 		yazu->wl_compositor = wl_registry_bind(wl_registry, name,
 			&wl_compositor_interface, 3);
@@ -279,6 +280,7 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		yazu->wl_shm = wl_registry_bind(wl_registry, name,
 			&wl_shm_interface, 1);
 		assert(yazu->wl_shm);
+		wl_shm_add_listener(yazu->wl_shm, &shm_listener, yazu);
 	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
 		struct yazu_seat *seat = calloc(1, sizeof(struct yazu_seat));
 		assert(seat);
@@ -356,14 +358,8 @@ static void ext_image_copy_capture_frame_handle_ready(void *data,
 		struct ext_image_copy_capture_frame_v1 *frame) {
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
-
-	RETURN_IF_NOT_RUNNING
-
 	capture->frame_ready = true;
-	if (capture->byte_order != DEFAULT_BYTE_ORDER) {
-		/* reorder_bytes(capture->buffer->data, capture->buffer->size, */
-		/* 	capture->byte_order); */
-	}
+	recompute_dimensions(yazu);
 
 	set_dirty(yazu);
 }
@@ -372,9 +368,6 @@ static void ext_image_copy_capture_frame_handle_failed(void *data,
 		struct ext_image_copy_capture_frame_v1 *frame, uint32_t reason) {
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
-
-	RETURN_IF_NOT_RUNNING
-
 	fprintf(stderr, "failed to copy frame from output\n");
 	yazu->failed = true;
 	yazu->running = false;
@@ -402,21 +395,30 @@ static void ext_image_copy_capture_session_handle_buffer_size(void *data,
 	yazu->capture_target_y = capture->buffer_height / 2.0f;
 }
 
+static bool compositor_is_shm_format_supported(struct yazu *yazu, uint32_t shm_format) {
+	enum wl_shm_format *compositor_format;
+	wl_array_for_each(compositor_format, &yazu->compositor_supported_shm_formats) {
+		if (*compositor_format == shm_format) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 static void ext_image_copy_capture_session_handle_shm_format(void *data,
 		struct ext_image_copy_capture_session_v1 *session, uint32_t shm_format) {
 	struct yazu_capture *capture = data;
+	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 	if (capture->has_shm_format) {
 		return;
 	}
 
-	uint8_t byte_order = is_shm_format_supported(shm_format);
-	if (byte_order == 0) {
-		return;
+	if (compositor_is_shm_format_supported(yazu, shm_format) &&
+			client_is_shm_format_supported(shm_format)) {
+		capture->shm_format = shm_format;
+		capture->has_shm_format = true;
 	}
-
-	capture->shm_format = shm_format;
-	capture->has_shm_format = true;
-	capture->byte_order = byte_order;
 }
 
 static void ext_image_copy_capture_session_handle_dmabuf_device(void *data,
@@ -433,9 +435,6 @@ static void ext_image_copy_capture_session_handle_done(void *data,
 		struct ext_image_copy_capture_session_v1 *session) {
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
-
-	RETURN_IF_NOT_RUNNING
-
 	if (capture->capture_started) {
 		return;
 	}
@@ -470,6 +469,7 @@ static void ext_image_copy_capture_session_handle_done(void *data,
 error:
 	yazu->failed = true;
 	yazu->running = false;
+
 	return;
 }
 
@@ -477,13 +477,11 @@ static void ext_image_copy_capture_session_handle_stopped(void *data,
 		struct ext_image_copy_capture_session_v1 *session) {
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
-
-	RETURN_IF_NOT_RUNNING
-
 	if (!capture->capture_started) {
 		fprintf(stderr, "capture session closed before frame could be captured\n");
 		yazu->failed = true;
 		yazu->running = false;
+
 		return;
 	}
 }
@@ -504,9 +502,6 @@ static const struct ext_image_copy_capture_session_v1_listener ext_image_copy_ca
 static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
 		struct wl_output *wl_output) {
 	struct yazu *yazu = data;
-
-	RETURN_IF_NOT_RUNNING
-
 	assert(yazu->configured);
 	uint32_t capture_options = 0;
 	// TODO: make this configurable
@@ -530,18 +525,6 @@ static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
 
 #ifdef WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION
 static void surface_handle_preferred_buffer_scale(void *data, struct wl_surface *wl_surface, int32_t scale) {
-	struct yazu *yazu = data;
-
-	RETURN_IF_NOT_RUNNING
-
-	assert(scale >= 1);
-	// TODO: use fractional scale
-	if (yazu->scale != scale) {
-		yazu->scale = scale;
-		recompute_dimensions(yazu);
-
-		set_dirty(yazu);
-	}
 }
 
 static void surface_handle_preferred_buffer_transform(void *data, struct wl_surface *wl_surface, uint32_t transform) {
@@ -565,9 +548,6 @@ static void layer_surface_handle_configure(void *data,
 		struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial,
 		uint32_t width, uint32_t height) {
 	struct yazu *yazu = data;
-
-	RETURN_IF_NOT_RUNNING
-
 	bool is_initial_configure = !yazu->configured;
 	bool dimensions_changed = yazu->width != width || yazu->height != height;
 	yazu->configured = true;
@@ -582,6 +562,7 @@ static void layer_surface_handle_configure(void *data,
 		if (dimensions_changed) {
 			set_dirty(yazu);
 		}
+
 		return;
 	}
 
@@ -589,6 +570,7 @@ static void layer_surface_handle_configure(void *data,
 		fprintf(stderr, "failed to send first frame\n");
 		yazu->failed = true;
 		yazu->running = false;
+
 		return;
 	}
 
@@ -613,9 +595,6 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 static void surface_frame_handle_done(void *data,
 		struct wl_callback *wl_callback, uint32_t time) {
 	struct yazu *yazu = data;
-
-	RETURN_IF_NOT_RUNNING
-
 	wl_callback_destroy(wl_callback);
 	yazu->surface_frame_callback = NULL;
 
@@ -654,22 +633,8 @@ static void set_dirty(struct yazu *yazu) {
 }
 
 static bool send_frame(struct yazu *yazu) {
-	struct yazu_capture *capture = &yazu->capture;
-	if (capture->frame_ready && (
-			yazu->buffer_width != capture->buffer_width ||
-			yazu->buffer_height != capture->buffer_height)) {
-		// The capture dimensions should match the surface's buffer
-		// dimensions unless we try to render a frame in between a
-		// scale/transform update and a configure. If so, let's just
-		// not render for now. We can unset the 'dirty' flag because
-		// once dimensions become consistent as result of a surface
-		// or output update, 'dirty' will have been set again by the
-		// corresponding handler.
-		goto set_dirty;
-	}
-
 	struct yazu_buffer *buffer;
-
+	struct yazu_capture *capture = &yazu->capture;
 	if (!capture->frame_ready) {
 		buffer = get_available_buffer(yazu->wl_shm, yazu->buffers, 2, yazu->buffer_width, yazu->buffer_height);
 		if (buffer == NULL) {
@@ -681,9 +646,19 @@ static bool send_frame(struct yazu *yazu) {
 		goto commit_surface;
 	}
 
+	if (!approximately_equals(yazu->scale_x, yazu->scale_y)) {
+		// 'scale_x' and 'scale_y' relate the surface size to the
+		// capture buffer size. If the aspect ratio of the capture
+		// buffer and surface are not equal it is assumed that this is
+		// temporary and will be resolved by a future configure or
+		// output transformation. Until then, let's just not render.
+		goto set_dirty;
+	}
+
 	buffer = capture->buffer;
-	/* buffer = get_available_buffer(yazu->wl_shm, yazu->buffers, 2, yazu->buffer_width, yazu->buffer_height); */
-	/* memset(buffer->data, 0, buffer->size); */
+	if (buffer->busy) {
+		return false;
+	}
 
 	wl_fixed_t viewport_x = wl_fixed_from_double(buffer_x_to_capture_x(yazu, 0));
 	wl_fixed_t viewport_y = wl_fixed_from_double(buffer_y_to_capture_y(yazu, 0));
@@ -693,10 +668,8 @@ static bool send_frame(struct yazu *yazu) {
 	wp_viewport_set_destination(yazu->wp_viewport, yazu->width, yazu->height);
 
 commit_surface:
-	assert(!buffer->busy);
 	buffer->busy = true;
 	wl_surface_attach(yazu->wl_surface, buffer->wl_buffer, 0, 0);
-	wl_surface_set_buffer_scale(yazu->wl_surface, yazu->scale);
 	wl_surface_damage(yazu->wl_surface, 0, 0, yazu->width, yazu->height);
 	wl_surface_commit(yazu->wl_surface);
 
@@ -756,10 +729,18 @@ static bool clamp_capture_target_y(struct yazu *yazu) {
 }
 
 static void recompute_dimensions(struct yazu *yazu) {
-	yazu->buffer_width = yazu->width * yazu->scale;
-	yazu->buffer_height = yazu->height * yazu->scale;
+	struct yazu_capture *capture = &yazu->capture;
+	if (capture->frame_ready) {
+		yazu->buffer_width = capture->buffer_width;
+		yazu->buffer_height = capture->buffer_height;
+	} else {
+		yazu->buffer_width = yazu->width;
+		yazu->buffer_height = yazu->height;
+	}
 	yazu->half_buffer_width = yazu->buffer_width / 2.0f;
 	yazu->half_buffer_height = yazu->buffer_height / 2.0f;
+	yazu->scale_x = ((double) yazu->buffer_width) / yazu->width;
+	yazu->scale_y = ((double) yazu->buffer_height) / yazu->height;
 }
 
 static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time) {
@@ -912,6 +893,10 @@ static void process_sliding(struct yazu *yazu, uint32_t time) {
 	}
 }
 
+static bool approximately_equals(double a, double b) {
+	return fabs(a - b) < 1.0e-6;
+}
+
 static void process_animations(struct yazu *yazu, uint32_t time) {
 	process_zooming(yazu, time);
 	process_sliding(yazu, time);
@@ -945,11 +930,13 @@ int main(int argc, char **argv) {
 	}
 	struct yazu yazu = {
 		.running = true,
-		.scale = 1,
+		.scale_x = 1,
+		.scale_y = 1,
 		.zoom_percent = 100,
 		.zoom_target_percent = 100,
 		.zoom_scale = 1,
 	};
+	wl_array_init(&yazu.compositor_supported_shm_formats);
 	wl_list_init(&yazu.seats);
 	wl_list_init(&yazu.outputs);
 	struct wl_registry *wl_registry = wl_display_get_registry(display);
@@ -1016,6 +1003,7 @@ cleanup_bindings:
 	destroy_global_object_if_exists(zwlr_layer_shell, _v1);
 	destroy_global_object_if_exists(ext_output_image_capture_source_manager, _v1);
 	destroy_global_object_if_exists(ext_image_copy_capture_manager, _v1);
+	wl_array_release(&yazu.compositor_supported_shm_formats);
 	struct yazu_seat *seat, *seat_tmp;
 	wl_list_for_each_safe(seat, seat_tmp, &yazu.seats, link) {
 		wl_list_remove(&seat->link);
