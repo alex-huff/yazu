@@ -966,6 +966,9 @@ int main(int argc, char **argv) {
 		goto cleanup_bindings;
 	}
 
+	// roundtrip for supported shm formats
+	wl_display_roundtrip(display);
+
 	yazu.wl_surface = wl_compositor_create_surface(yazu.wl_compositor);
 	assert(yazu.wl_surface);
 	yazu.wp_viewport = wp_viewporter_get_viewport(yazu.wp_viewporter, yazu.wl_surface);
