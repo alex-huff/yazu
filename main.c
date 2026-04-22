@@ -923,11 +923,14 @@ static void destroy_capture(struct yazu_capture *capture) {
 }
 
 int main(int argc, char **argv) {
+	bool ret_code = EXIT_FAILURE;
 	struct wl_display *display = wl_display_connect(NULL);
 	if (display == NULL) {
 		fprintf(stderr, "failed to connect to Wayland display\n");
+
 		return EXIT_FAILURE;
 	}
+
 	struct yazu yazu = {
 		.running = true,
 		.scale_x = 1,
@@ -946,11 +949,11 @@ int main(int argc, char **argv) {
 	// roundtrip for registry
 	wl_display_roundtrip(display);
 
-	bool ret_code = EXIT_FAILURE;
+	bool unsupported_compositor = false;
 #define verify_global_object_exists(object_name) \
 	if (yazu.object_name == NULL) { \
 		fprintf(stderr, "compositor doesn't support " #object_name "\n"); \
-		goto cleanup_bindings; \
+		unsupported_compositor = true; \
 	}
 	verify_global_object_exists(wl_compositor);
 	verify_global_object_exists(wl_shm);
@@ -959,6 +962,9 @@ int main(int argc, char **argv) {
 	verify_global_object_exists(ext_image_copy_capture_manager);
 	verify_global_object_exists(ext_output_image_capture_source_manager);
 	verify_global_object_exists(zwlr_layer_shell);
+	if (unsupported_compositor) {
+		goto cleanup_bindings;
+	}
 
 	yazu.wl_surface = wl_compositor_create_surface(yazu.wl_compositor);
 	assert(yazu.wl_surface);
