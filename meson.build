@@ -8,7 +8,8 @@ srcs = ['main.c', 'buffer.c']
 incdir = include_directories('include')
 
 wayland_client = dependency('wayland-client')
-deps = [wayland_client]
+egl = dependency('egl')
+deps = [wayland_client, egl]
 
 subdir('protocols')
 

@@ -13,6 +13,10 @@
 #include <unistd.h>
 #include <assert.h>
 #include <wayland-client.h>
+#include <wayland-egl.h>
+#include <GLES2/gl2.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 
 #include "viewporter-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
