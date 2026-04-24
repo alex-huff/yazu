@@ -192,7 +192,7 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
 
 	double value = wl_fixed_to_double(fixed_value);
 	double old_zoom_target_percent = yazu->zoom_target_percent;
-	yazu->zoom_target_percent -= value;
+	yazu->zoom_target_percent -= 2 * value;
 	yazu->zoom_target_percent = MAX(100, yazu->zoom_target_percent);
 	if (yazu->zoom_target_percent == old_zoom_target_percent) {
 		return;
