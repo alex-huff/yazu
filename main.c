@@ -1056,6 +1056,12 @@ int main(int argc, char **argv) {
 		wl_callback_destroy(yazu.surface_frame_callback);
 	}
 
+	EGLint result;
+	result = eglTerminate(yazu.egl.display);
+	assert(result == EGL_TRUE);
+	result = eglReleaseThread();
+	assert(result == EGL_TRUE);
+
 cleanup_bindings:
 #define destroy_global_object_if_exists(object_name, version_id) \
 	if (yazu.object_name) { \
