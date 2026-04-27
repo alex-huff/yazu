@@ -47,6 +47,7 @@ struct yazu_capture {
 };
 
 struct yazu {
+	struct wl_display *display;
 	struct wl_compositor *wl_compositor;
 	struct wl_shm *wl_shm;
 	struct wp_viewporter *wp_viewporter;
@@ -65,6 +66,12 @@ struct yazu {
 	struct zwlr_layer_surface_v1 *layer_surface;
 
 	struct wl_callback *surface_frame_callback;
+
+	struct {
+		EGLDisplay display;
+		EGLContext context;
+		EGLConfig config;
+	} egl;
 
 	struct yazu_buffer *buffers[2];
 	struct yazu_capture capture;

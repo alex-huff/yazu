@@ -922,15 +922,57 @@ static void destroy_capture(struct yazu_capture *capture) {
 	destroy_buffer(capture->buffer);
 }
 
+static void initialize_egl(struct yazu *yazu) {
+	EGLint config_attributes[] = {
+		EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+		EGL_RED_SIZE, 1,
+		EGL_GREEN_SIZE, 1,
+		EGL_BLUE_SIZE, 1,
+		EGL_ALPHA_SIZE, 0,
+		EGL_NONE
+	};
+	EGLint context_attributes[] = {
+		EGL_CONTEXT_CLIENT_VERSION, 2,
+		EGL_NONE
+	};
+	EGLBoolean result;
+	EGLConfig *matching_configs;
+	EGLint num_matching_configs;
+
+	yazu->egl.display = eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, yazu->display, NULL);
+	assert(yazu->egl.display != EGL_NO_DISPLAY);
+	result = eglInitialize(yazu->egl.display, NULL, NULL);
+	assert(result == EGL_TRUE);
+	result = eglBindAPI(EGL_OPENGL_ES_API);
+	assert(result == EGL_TRUE);
+
+	result = eglChooseConfig(yazu->egl.display, config_attributes, NULL, 0, &num_matching_configs);
+	assert(result == EGL_TRUE && num_matching_configs);
+	matching_configs = calloc(num_matching_configs, sizeof(EGLConfig));
+	assert(matching_configs);
+	result = eglChooseConfig(yazu->egl.display, config_attributes, matching_configs, num_matching_configs, &num_matching_configs);
+	assert(result == EGL_TRUE && num_matching_configs);
+	for (EGLint i = 0; i < num_matching_configs; i++) {
+		EGLConfig config = matching_configs[i];
+		EGLint buffer_bpp, red_size, green_size, blue_size, alpha_size;
+		eglGetConfigAttrib(yazu->egl.display, config, EGL_BUFFER_SIZE, &buffer_bpp);
+		eglGetConfigAttrib(yazu->egl.display, config, EGL_RED_SIZE, &red_size);
+		eglGetConfigAttrib(yazu->egl.display, config, EGL_GREEN_SIZE, &green_size);
+		eglGetConfigAttrib(yazu->egl.display, config, EGL_BLUE_SIZE, &blue_size);
+		eglGetConfigAttrib(yazu->egl.display, config, EGL_ALPHA_SIZE, &alpha_size);
+		printf("buffer_bpp: %d, red_size: %d, green_size: %d, blue_size: %d, alpha_size: %d\n",
+			buffer_bpp, red_size, green_size, blue_size, alpha_size);
+	}
+	yazu->egl.config = matching_configs[0];
+	free(matching_configs);
+
+	yazu->egl.context = eglCreateContext(yazu->egl.display, yazu->egl.config, EGL_NO_CONTEXT, context_attributes);
+	assert(yazu->egl.context != EGL_NO_CONTEXT);
+}
+
 int main(int argc, char **argv) {
 	bool ret_code = EXIT_FAILURE;
-	struct wl_display *display = wl_display_connect(NULL);
-	if (display == NULL) {
-		fprintf(stderr, "failed to connect to Wayland display\n");
-
-		return EXIT_FAILURE;
-	}
-
 	struct yazu yazu = {
 		.running = true,
 		.scale_x = 1,
@@ -939,6 +981,14 @@ int main(int argc, char **argv) {
 		.zoom_target_percent = 100,
 		.zoom_scale = 1,
 	};
+	struct wl_display *display = wl_display_connect(NULL);
+	if (display == NULL) {
+		fprintf(stderr, "failed to connect to Wayland display\n");
+
+		return EXIT_FAILURE;
+	}
+
+	yazu.display = display;
 	wl_array_init(&yazu.compositor_supported_shm_formats);
 	wl_list_init(&yazu.seats);
 	wl_list_init(&yazu.outputs);
@@ -968,6 +1018,8 @@ int main(int argc, char **argv) {
 
 	// roundtrip for supported shm formats
 	wl_display_roundtrip(display);
+
+	initialize_egl(&yazu);
 
 	yazu.wl_surface = wl_compositor_create_surface(yazu.wl_compositor);
 	assert(yazu.wl_surface);
