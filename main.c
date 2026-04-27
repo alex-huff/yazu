@@ -784,7 +784,7 @@ static void process_zooming(struct yazu *yazu, uint32_t time) {
 	seat = yazu->zoom_seat;
 	capture_x_at_cursor = buffer_x_to_capture_x(yazu, seat->cursor_x);
 	capture_y_at_cursor = buffer_y_to_capture_y(yazu, seat->cursor_y);
-	time_scale = 40;
+	time_scale = 30;
 	last_tick_scaled_time = yazu->zoom_last_tick_time / time_scale;
 	scaled_time = time / time_scale;
 
