@@ -7,9 +7,10 @@ add_project_arguments(project_arguments, language : 'c')
 srcs = ['main.c', 'buffer.c']
 incdir = include_directories('include')
 
-wayland_client = dependency('wayland-client')
 egl = dependency('egl')
-deps = [wayland_client, egl]
+wayland_client = dependency('wayland-client')
+wayland_egl = dependency('wayland-egl')
+deps = [egl, wayland_client, wayland_egl]
 
 subdir('protocols')
 

@@ -971,6 +971,40 @@ static void initialize_egl(struct yazu *yazu) {
 	assert(yazu->egl.context != EGL_NO_CONTEXT);
 }
 
+static void terminate_egl(struct yazu *yazu) {
+	EGLint result;
+	result = eglTerminate(yazu->egl.display);
+	assert(result == EGL_TRUE);
+	result = eglReleaseThread();
+	assert(result == EGL_TRUE);
+}
+
+static void initialize_egl_surface(struct yazu *yazu) {
+	EGLAttrib attributes[1] = { EGL_NONE };
+	EGLBoolean result;
+	yazu->wl_egl_window = wl_egl_window_create(yazu->wl_surface,
+		yazu->capture.buffer_width, yazu->capture.buffer_height);
+	assert(yazu->wl_egl_window);
+	yazu->egl_surface = eglCreatePlatformWindowSurface(yazu->egl.display,
+		yazu->egl.config, yazu->wl_egl_window, attributes);
+	assert(yazu->egl_surface != EGL_NO_SURFACE);
+	result = eglMakeCurrent(yazu->egl.display, yazu->egl_surface,
+		yazu->egl_surface, yazu->egl.context);
+	assert(result == EGL_TRUE);
+	eglSwapInterval(yazu->egl.display, 1);
+}
+
+static void terminate_egl_surface(struct yazu *yazu) {
+	EGLint result;
+	result = eglMakeCurrent(yazu->egl.display,
+		EGL_NO_SURFACE, EGL_NO_SURFACE,
+		EGL_NO_CONTEXT);
+	assert(result == EGL_TRUE);
+	result = eglDestroySurface(yazu->egl.display, yazu->egl_surface);
+	assert(result == EGL_TRUE);
+	wl_egl_window_destroy(yazu->wl_egl_window);
+}
+
 int main(int argc, char **argv) {
 	bool ret_code = EXIT_FAILURE;
 	struct yazu yazu = {
@@ -1041,9 +1075,26 @@ int main(int argc, char **argv) {
 	wl_surface_commit(yazu.wl_surface);
 
 	int num_dispatched = 0;
-	while (yazu.running && (num_dispatched = wl_display_dispatch(display)) != -1) {
+	while (yazu.running &&
+			(num_dispatched = wl_display_dispatch(display)) != -1 &&
+			!yazu.capture.frame_ready) {
 	}
-	ret_code = yazu.failed || (num_dispatched == -1);
+	if (!yazu.running || num_dispatched == -1) {
+		goto cleanup;
+	}
+	assert(yazu.capture.frame_ready);
+
+	initialize_egl_surface(&yazu);
+	while (yazu.running &&
+			(num_dispatched = wl_display_dispatch_pending(display)) != -1) {
+		// TODO: REMOVE THIS!
+		wl_display_dispatch(display);
+		// render here
+	}
+	terminate_egl_surface(&yazu);
+
+cleanup:
+	ret_code = yazu.failed || num_dispatched == -1;
 
 	destroy_capture(&yazu.capture);
 	zwlr_layer_surface_v1_destroy(yazu.layer_surface);
@@ -1056,11 +1107,7 @@ int main(int argc, char **argv) {
 		wl_callback_destroy(yazu.surface_frame_callback);
 	}
 
-	EGLint result;
-	result = eglTerminate(yazu.egl.display);
-	assert(result == EGL_TRUE);
-	result = eglReleaseThread();
-	assert(result == EGL_TRUE);
+	terminate_egl(&yazu);
 
 cleanup_bindings:
 #define destroy_global_object_if_exists(object_name, version_id) \

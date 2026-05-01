@@ -72,6 +72,8 @@ struct yazu {
 		EGLContext context;
 		EGLConfig config;
 	} egl;
+	struct wl_egl_window *wl_egl_window;
+	EGLSurface *egl_surface;
 
 	struct yazu_buffer *buffers[2];
 	struct yazu_capture capture;
