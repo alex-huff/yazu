@@ -1,5 +1,6 @@
 #include "yazu.h"
 #include "buffer.h"
+#include "pixfmt.h"
 
 // https://wayland-book.com/print.html
 static void randname(char *buf) {
@@ -63,26 +64,10 @@ static const struct wl_buffer_listener buffer_listener = {
 
 // END BUFFER
 
-bool client_is_shm_format_supported(enum wl_shm_format wl_shm_format) {
-	switch (wl_shm_format) {
-	case WL_SHM_FORMAT_ARGB8888:
-	case WL_SHM_FORMAT_XRGB8888:
-	case WL_SHM_FORMAT_XBGR8888:
-	case WL_SHM_FORMAT_RGBX8888:
-	case WL_SHM_FORMAT_BGRX8888:
-	case WL_SHM_FORMAT_ABGR8888:
-	case WL_SHM_FORMAT_RGBA8888:
-	case WL_SHM_FORMAT_BGRA8888:
-		return true;
-	default:
-		return false;
-	}
-}
-
 struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
-		uint32_t height, enum wl_shm_format wl_shm_format) {
+		uint32_t height, enum wl_shm_format shm_format) {
 	// only 32-bit 8888 formats are supported for now
-	if (!client_is_shm_format_supported(wl_shm_format)) {
+	if (client_is_shm_format_supported(shm_format) == 0) {
 		return NULL;
 	}
 
@@ -109,7 +94,7 @@ struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 
 	struct wl_shm_pool *pool = wl_shm_create_pool(wl_shm, fd, size);
 	assert(pool);
-	wl_buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, wl_shm_format);
+	wl_buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, shm_format);
 	assert(wl_buffer);
 	struct yazu_buffer *buffer = calloc(1, sizeof(struct yazu_buffer));
 	assert(buffer);

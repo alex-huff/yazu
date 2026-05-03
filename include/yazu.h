@@ -39,6 +39,7 @@ struct yazu_capture {
 
 	bool has_shm_format;
 	enum wl_shm_format shm_format;
+	uint8_t byte_order;
 
 	uint32_t buffer_width, buffer_height;
 	enum wl_output_transform transform;

@@ -13,8 +13,6 @@ struct yazu_buffer {
 	bool busy;
 };
 
-bool client_is_shm_format_supported(enum wl_shm_format wl_shm_format);
-
 struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 		uint32_t height, enum wl_shm_format wl_fmt);
 

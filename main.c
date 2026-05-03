@@ -1,5 +1,6 @@
 #include "yazu.h"
 #include "buffer.h"
+#include "pixfmt.h"
 
 // milliseconds
 #define SAMPLE_IS_OLD_THRESHOLD 50
@@ -89,7 +90,7 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
-	if (!yazu->gl_initialized) {
+	if (!yazu->capture.frame_ready) {
 		return;
 	}
 
@@ -173,7 +174,7 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
-	if (!yazu->gl_initialized) {
+	if (!yazu->capture.frame_ready) {
 		return;
 	}
 
@@ -215,7 +216,7 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
-	if (!yazu->gl_initialized) {
+	if (!yazu->capture.frame_ready) {
 		return;
 	}
 
@@ -283,7 +284,7 @@ static const struct wl_seat_listener seat_listener = {
 // BEGIN SHM
 
 static void shm_handle_format(void *data, struct wl_shm *wl_shm,
-		uint32_t format) {
+		uint32_t shm_format) {
 	struct yazu *yazu = data;
 	struct wl_array *shm_formats_array = &yazu->compositor_supported_shm_formats;
 	wl_array_add(shm_formats_array, sizeof(enum wl_shm_format));
@@ -291,7 +292,7 @@ static void shm_handle_format(void *data, struct wl_shm *wl_shm,
 	enum wl_shm_format *last =
 		((enum wl_shm_format *) shm_formats_array->data) +
 		(num_formats - 1);
-	*last = format;
+	*last = shm_format;
 }
 
 static const struct wl_shm_listener shm_listener = {
@@ -396,6 +397,13 @@ static void ext_image_copy_capture_frame_handle_ready(void *data,
 		struct ext_image_copy_capture_frame_v1 *frame) {
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
+	struct yazu_buffer *buffer = capture->buffer;
+	uint32_t byte_order = capture->byte_order;
+
+	if (byte_order != DEFAULT_BYTE_ORDER) {
+		reorder_bytes(buffer->data, buffer->size, byte_order);
+	}
+
 	capture->frame_ready = true;
 	recompute_dimensions(yazu);
 }
@@ -450,9 +458,11 @@ static void ext_image_copy_capture_session_handle_shm_format(void *data,
 		return;
 	}
 
+	uint32_t byte_order;
 	if (compositor_is_shm_format_supported(yazu, shm_format) &&
-			client_is_shm_format_supported(shm_format)) {
+			(byte_order = client_is_shm_format_supported(shm_format))) {
 		capture->shm_format = shm_format;
+		capture->byte_order = byte_order;
 		capture->has_shm_format = true;
 	}
 }
@@ -701,17 +711,17 @@ static void render(struct yazu *yazu) {
 	capture_sample_ex /= capture->buffer_width;
 	capture_sample_ey /= capture->buffer_height;
 
-	vertices[2 + 0 * 4] = capture_sample_sx;
-	vertices[3 + 0 * 4] = capture_sample_ey;
+	vertices[2 + 0 * vertices_stride] = capture_sample_sx;
+	vertices[3 + 0 * vertices_stride] = capture_sample_ey;
 
-	vertices[2 + 1 * 4] = capture_sample_ex;
-	vertices[3 + 1 * 4] = capture_sample_ey;
+	vertices[2 + 1 * vertices_stride] = capture_sample_ex;
+	vertices[3 + 1 * vertices_stride] = capture_sample_ey;
 
-	vertices[2 + 2 * 4] = capture_sample_ex;
-	vertices[3 + 2 * 4] = capture_sample_sy;
+	vertices[2 + 2 * vertices_stride] = capture_sample_ex;
+	vertices[3 + 2 * vertices_stride] = capture_sample_sy;
 
-	vertices[2 + 3 * 4] = capture_sample_sx;
-	vertices[3 + 3 * 4] = capture_sample_sy;
+	vertices[2 + 3 * vertices_stride] = capture_sample_sx;
+	vertices[3 + 3 * vertices_stride] = capture_sample_sy;
 
 	glVertexAttribPointer(yazu->gl.vertex_position, 2, GL_FLOAT, GL_FALSE,
 		vertices_stride * sizeof(float), vertices);
@@ -1003,17 +1013,17 @@ static void initialize_egl(struct yazu *yazu) {
 	assert(matching_configs);
 	result = eglChooseConfig(yazu->egl.display, config_attributes, matching_configs, num_matching_configs, &num_matching_configs);
 	assert(result == EGL_TRUE && num_matching_configs);
-	for (EGLint i = 0; i < num_matching_configs; i++) {
-		EGLConfig config = matching_configs[i];
-		EGLint buffer_bpp, red_size, green_size, blue_size, alpha_size;
-		eglGetConfigAttrib(yazu->egl.display, config, EGL_BUFFER_SIZE, &buffer_bpp);
-		eglGetConfigAttrib(yazu->egl.display, config, EGL_RED_SIZE, &red_size);
-		eglGetConfigAttrib(yazu->egl.display, config, EGL_GREEN_SIZE, &green_size);
-		eglGetConfigAttrib(yazu->egl.display, config, EGL_BLUE_SIZE, &blue_size);
-		eglGetConfigAttrib(yazu->egl.display, config, EGL_ALPHA_SIZE, &alpha_size);
-		printf("buffer_bpp: %d, red_size: %d, green_size: %d, blue_size: %d, alpha_size: %d\n",
-			buffer_bpp, red_size, green_size, blue_size, alpha_size);
-	}
+	/* for (EGLint i = 0; i < num_matching_configs; i++) { */
+	/* 	EGLConfig config = matching_configs[i]; */
+	/* 	EGLint buffer_bpp, red_size, green_size, blue_size, alpha_size; */
+	/* 	eglGetConfigAttrib(yazu->egl.display, config, EGL_BUFFER_SIZE, &buffer_bpp); */
+	/* 	eglGetConfigAttrib(yazu->egl.display, config, EGL_RED_SIZE, &red_size); */
+	/* 	eglGetConfigAttrib(yazu->egl.display, config, EGL_GREEN_SIZE, &green_size); */
+	/* 	eglGetConfigAttrib(yazu->egl.display, config, EGL_BLUE_SIZE, &blue_size); */
+	/* 	eglGetConfigAttrib(yazu->egl.display, config, EGL_ALPHA_SIZE, &alpha_size); */
+	/* 	printf("buffer_bpp: %d, red_size: %d, green_size: %d, blue_size: %d, alpha_size: %d\n", */
+	/* 		buffer_bpp, red_size, green_size, blue_size, alpha_size); */
+	/* } */
 	yazu->egl.config = matching_configs[0];
 	free(matching_configs);
 
