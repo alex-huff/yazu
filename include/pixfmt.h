@@ -3,7 +3,7 @@
 
 #include "yazu.h"
 
-void reorder_bytes(uint32_t *data, size_t data_size, uint8_t byte_order);
+void to_big_endian_rgbx(uint32_t *data, size_t data_size, uint8_t byte_order);
 
 uint8_t client_is_shm_format_supported(enum wl_shm_format shm_format);
 

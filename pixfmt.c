@@ -9,7 +9,7 @@ static inline uint32_t right_shift(uint32_t in, int8_t amount) {
 	}
 }
 
-void reorder_bytes(uint32_t *data, size_t data_size, uint8_t byte_order) {
+void to_big_endian_rgbx(uint32_t *data, size_t data_size, uint8_t byte_order) {
 	int8_t byte_shift_0 = ((int8_t) ((byte_order & 0b00000011u) >> 0) - 0) * 8;
 	int8_t byte_shift_1 = ((int8_t) ((byte_order & 0b00001100u) >> 2) - 1) * 8;
 	int8_t byte_shift_2 = ((int8_t) ((byte_order & 0b00110000u) >> 4) - 2) * 8;
