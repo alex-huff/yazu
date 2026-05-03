@@ -13,14 +13,12 @@ void reorder_bytes(uint32_t *data, size_t data_size, uint8_t byte_order) {
 	int8_t byte_shift_0 = ((int8_t) ((byte_order & 0b00000011u) >> 0) - 0) * 8;
 	int8_t byte_shift_1 = ((int8_t) ((byte_order & 0b00001100u) >> 2) - 1) * 8;
 	int8_t byte_shift_2 = ((int8_t) ((byte_order & 0b00110000u) >> 4) - 2) * 8;
-	int8_t byte_shift_3 = ((int8_t) ((byte_order & 0b11000000u) >> 6) - 3) * 8;
 	for (size_t i = 0; i < data_size / sizeof(uint32_t); i++) {
 		data[i] =
 			(right_shift(data[i], byte_shift_0) & 0x000000FFu) |
 			(right_shift(data[i], byte_shift_1) & 0x0000FF00u) |
 			(right_shift(data[i], byte_shift_2) & 0x00FF0000u) |
-			(right_shift(data[i], byte_shift_3) & 0xFF000000u);
-		data[i] |= 0xFF000000u;
+			0xFF000000u;
 	}
 }
 
