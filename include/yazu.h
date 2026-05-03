@@ -20,6 +20,7 @@
 
 #include "viewporter-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
+#include "single-pixel-buffer-v1-client-protocol.h"
 #include "ext-image-copy-capture-v1-client-protocol.h"
 #include "ext-image-capture-source-v1-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -52,6 +53,7 @@ struct yazu {
 	struct wl_shm *wl_shm;
 	struct wp_viewporter *wp_viewporter;
 	struct wp_cursor_shape_manager_v1 *wp_cursor_shape_manager;
+	struct wp_single_pixel_buffer_manager_v1 *wp_single_pixel_buffer_manager;
 	struct ext_image_copy_capture_manager_v1 *ext_image_copy_capture_manager;
 	struct ext_output_image_capture_source_manager_v1 *ext_output_image_capture_source_manager;
 	struct zwlr_layer_shell_v1 *zwlr_layer_shell;
@@ -75,6 +77,10 @@ struct yazu {
 	struct wl_egl_window *wl_egl_window;
 	EGLSurface *egl_surface;
 
+	struct {
+		GLuint vertex_position, texture_position;
+	} gl;
+
 	struct yazu_buffer *buffers[2];
 	struct yazu_capture capture;
 
@@ -95,6 +101,7 @@ struct yazu {
 
 	double capture_target_x, capture_target_y;
 
+	bool gl_initialized;
 	bool running;
 	bool failed;
 	bool configured;

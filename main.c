@@ -4,11 +4,34 @@
 // milliseconds
 #define SAMPLE_IS_OLD_THRESHOLD 50
 
+static const char *vertex_shader_string =
+	"attribute vec2 vertex_position;\n"
+	"attribute vec2 texture_position;\n"
+	"varying vec2 v_texture_position;\n"
+	"void main() {\n"
+	"	gl_Position = vec4(vertex_position, 0.0, 1.0);\n"
+	"	v_texture_position = texture_position;\n"
+	"}\n";
+
+static const char *fragment_shader_string =
+	"#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+	"precision highp float;\n"
+	"#else\n"
+	"precision mediump float;\n"
+	"#endif\n"
+	"uniform sampler2D capture_texture;\n"
+	"varying vec2 v_texture_position;\n"
+	"void main() {\n"
+	"	gl_FragColor = texture2D(capture_texture, v_texture_position);\n"
+	"}\n";
+
 static void setup_surface_frame_callback(struct yazu *yazu);
+
+static void setup_viewport_source(struct yazu *yazu, uint32_t x, uint32_t y, uint32_t width, uint32_t height);
 
 static void set_dirty(struct yazu *yazu);
 
-static bool send_frame(struct yazu *yazu);
+static void send_frame(struct yazu *yazu);
 
 static double real_zoom_scale(struct yazu *yazu);
 
@@ -29,8 +52,6 @@ static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time);
 static double squared_distance(double dx, double dy);
 
 static void process_animations(struct yazu *yazu, uint32_t time);
-
-static bool approximately_equals(double a, double b);
 
 static void destroy_pointer(struct yazu_seat *yazu_seat);
 
@@ -230,7 +251,9 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 	if (seat->wl_pointer == NULL && has_pointer) {
 		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
 		assert(seat->wl_pointer);
-		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
+		if (yazu->gl_initialized) {
+			wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
+		}
 		seat->wp_cursor_shape_device =
 			wp_cursor_shape_manager_v1_get_pointer(
 				yazu->wp_cursor_shape_manager,
@@ -308,6 +331,11 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 		yazu->wp_cursor_shape_manager = wl_registry_bind(wl_registry,
 			name, &wp_cursor_shape_manager_v1_interface, 1);
 		assert(yazu->wp_cursor_shape_manager);
+	} else if (strcmp(interface, wp_single_pixel_buffer_manager_v1_interface.name) == 0) {
+		yazu->wp_single_pixel_buffer_manager = wl_registry_bind(
+			wl_registry, name,
+			&wp_single_pixel_buffer_manager_v1_interface, 1);
+		assert(yazu->wp_single_pixel_buffer_manager);
 	} else if (strcmp(interface, ext_image_copy_capture_manager_v1_interface.name) == 0) {
 		yazu->ext_image_copy_capture_manager = wl_registry_bind(
 			wl_registry, name,
@@ -360,8 +388,6 @@ static void ext_image_copy_capture_frame_handle_ready(void *data,
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 	capture->frame_ready = true;
 	recompute_dimensions(yazu);
-
-	set_dirty(yazu);
 }
 
 static void ext_image_copy_capture_frame_handle_failed(void *data,
@@ -548,33 +574,32 @@ static void layer_surface_handle_configure(void *data,
 		struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial,
 		uint32_t width, uint32_t height) {
 	struct yazu *yazu = data;
-	bool is_initial_configure = !yazu->configured;
-	bool dimensions_changed = yazu->width != width || yazu->height != height;
 	yazu->configured = true;
+	zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
+	bool dimensions_changed = yazu->width != width || yazu->height != height;
 	if (dimensions_changed) {
 		yazu->width = width;
 		yazu->height = height;
+		wp_viewport_set_destination(yazu->wp_viewport, yazu->width, yazu->height);
 		recompute_dimensions(yazu);
+		set_dirty(yazu);
 	}
-
-	zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
-	if (!is_initial_configure) {
-		if (dimensions_changed) {
-			set_dirty(yazu);
-		}
-
+	if (!dimensions_changed || yazu->gl_initialized) {
 		return;
 	}
 
-	if (!send_frame(yazu)) {
-		fprintf(stderr, "failed to send first frame\n");
-		yazu->failed = true;
-		yazu->running = false;
+	// map a completely transparent surface initially so that we can
+	// determine the output to capture from the surface's enter event
+	struct wl_buffer *wl_buffer = wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer(
+		yazu->wp_single_pixel_buffer_manager, 0, 0, 0, 0);
 
-		return;
-	}
+	setup_viewport_source(yazu, 0, 0, 1, 1);
 
-	setup_surface_frame_callback(yazu);
+	wl_surface_attach(yazu->wl_surface, wl_buffer, 0, 0);
+	wl_surface_damage(yazu->wl_surface, 0, 0, yazu->width, yazu->height);
+	wl_surface_commit(yazu->wl_surface);
+
+	wl_buffer_destroy(wl_buffer);
 }
 
 static void layer_surface_handle_closed(void *data,
@@ -600,8 +625,8 @@ static void surface_frame_handle_done(void *data,
 
 	if (yazu->dirty) {
 		process_animations(yazu, time);
-		send_frame(yazu);
 		setup_surface_frame_callback(yazu);
+		send_frame(yazu);
 	}
 }
 
@@ -616,67 +641,87 @@ static void setup_surface_frame_callback(struct yazu *yazu) {
 	assert(yazu->surface_frame_callback);
 	wl_callback_add_listener(yazu->surface_frame_callback,
 		&surface_frame_listener, yazu);
-	wl_surface_commit(yazu->wl_surface);
+}
+
+
+static void setup_viewport_source(struct yazu *yazu, uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
+	wl_fixed_t viewport_x, viewport_y, viewport_width, viewport_height;
+
+	viewport_x = wl_fixed_from_int(x);
+	viewport_y = wl_fixed_from_int(y);
+	viewport_width = wl_fixed_from_int(width);
+	viewport_height = wl_fixed_from_int(height);
+	wp_viewport_set_source(yazu->wp_viewport, viewport_x, viewport_y, viewport_width, viewport_height);
 }
 
 static void set_dirty(struct yazu *yazu) {
-	if (!yazu->configured) {
-		return;
-	}
-
 	yazu->dirty = true;
-	if (yazu->surface_frame_callback) {
+	if (yazu->surface_frame_callback || !yazu->gl_initialized) {
 		return;
 	}
 
 	setup_surface_frame_callback(yazu);
+	wl_surface_commit(yazu->wl_surface);
 }
 
-static bool send_frame(struct yazu *yazu) {
-	struct yazu_buffer *buffer;
+static void render(struct yazu *yazu) {
+	static size_t vertices_stride = 4;
+	static GLfloat vertices[] = {
+		// v_pos   t_pos
+		   -1, -1, 0, 1, // bottom left
+		    1, -1, 1, 1, // bottom right
+		    1,  1, 1, 0, // top right
+		   -1,  1, 0, 0, // top left
+	};
+	static GLushort indices[] = {
+		0, 1, 3, // first triangle
+		1, 2, 3, // second triangle
+	};
 	struct yazu_capture *capture = &yazu->capture;
-	if (!capture->frame_ready) {
-		buffer = get_available_buffer(yazu->wl_shm, yazu->buffers, 2, yazu->buffer_width, yazu->buffer_height);
-		if (buffer == NULL) {
-			return false;
-		}
+	double capture_sample_sx, capture_sample_sy, capture_sample_ex,
+		capture_sample_ey;
 
-		memset(buffer->data, 0, buffer->size);
+	capture_sample_sx = buffer_x_to_capture_x(yazu, 0);
+	capture_sample_sy = buffer_y_to_capture_y(yazu, 0);
+	capture_sample_ex = buffer_x_to_capture_x(yazu, yazu->buffer_width);
+	capture_sample_ey = buffer_y_to_capture_y(yazu, yazu->buffer_height);
 
-		goto commit_surface;
-	}
+	capture_sample_sx /= capture->buffer_width;
+	capture_sample_sy /= capture->buffer_height;
+	capture_sample_ex /= capture->buffer_width;
+	capture_sample_ey /= capture->buffer_height;
 
-	if (!approximately_equals(yazu->scale_x, yazu->scale_y)) {
-		// 'scale_x' and 'scale_y' relate the surface size to the
-		// capture buffer size. If the aspect ratio of the capture
-		// buffer and surface are not equal it is assumed that this is
-		// temporary and will be resolved by a future configure or
-		// output transformation. Until then, let's just not render.
-		goto set_dirty;
-	}
+	vertices[2 + 0 * 4] = capture_sample_sx;
+	vertices[3 + 0 * 4] = capture_sample_ey;
 
-	buffer = capture->buffer;
-	if (buffer->busy) {
-		return false;
-	}
+	vertices[2 + 1 * 4] = capture_sample_ex;
+	vertices[3 + 1 * 4] = capture_sample_ey;
 
-	wl_fixed_t viewport_x = wl_fixed_from_double(buffer_x_to_capture_x(yazu, 0));
-	wl_fixed_t viewport_y = wl_fixed_from_double(buffer_y_to_capture_y(yazu, 0));
-	wl_fixed_t viewport_width = wl_fixed_from_double(capture->buffer_width / real_zoom_scale(yazu));
-	wl_fixed_t viewport_height = wl_fixed_from_double(capture->buffer_height / real_zoom_scale(yazu));
-	wp_viewport_set_source(yazu->wp_viewport, viewport_x, viewport_y, viewport_width, viewport_height);
-	wp_viewport_set_destination(yazu->wp_viewport, yazu->width, yazu->height);
+	vertices[2 + 2 * 4] = capture_sample_ex;
+	vertices[3 + 2 * 4] = capture_sample_sy;
 
-commit_surface:
-	buffer->busy = true;
-	wl_surface_attach(yazu->wl_surface, buffer->wl_buffer, 0, 0);
-	wl_surface_damage(yazu->wl_surface, 0, 0, yazu->width, yazu->height);
-	wl_surface_commit(yazu->wl_surface);
+	vertices[2 + 3 * 4] = capture_sample_sx;
+	vertices[3 + 3 * 4] = capture_sample_sy;
 
-set_dirty:
+	glVertexAttribPointer(yazu->gl.vertex_position, 2, GL_FLOAT, GL_FALSE,
+		vertices_stride * sizeof(float), vertices);
+	glVertexAttribPointer(yazu->gl.texture_position, 2, GL_FLOAT, GL_FALSE,
+		vertices_stride * sizeof(float), &vertices[2]);
+	glEnableVertexAttribArray(yazu->gl.vertex_position);
+	glEnableVertexAttribArray(yazu->gl.texture_position);
+
+	glClearColor(0, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDrawElements(GL_TRIANGLES, sizeof(indices) / sizeof(GLushort),
+		GL_UNSIGNED_SHORT, indices);
+
+	eglSwapBuffers(yazu->egl.display, yazu->egl_surface);
+}
+
+static void send_frame(struct yazu *yazu) {
+	render(yazu);
+
 	yazu->dirty = yazu->sliding || yazu->zooming;
-
-	return true;
 }
 
 static double real_zoom_scale(struct yazu *yazu) {
@@ -734,8 +779,8 @@ static void recompute_dimensions(struct yazu *yazu) {
 		yazu->buffer_width = capture->buffer_width;
 		yazu->buffer_height = capture->buffer_height;
 	} else {
-		yazu->buffer_width = yazu->width;
-		yazu->buffer_height = yazu->height;
+		yazu->buffer_width = 1;
+		yazu->buffer_height = 1;
 	}
 	yazu->half_buffer_width = yazu->buffer_width / 2.0f;
 	yazu->half_buffer_height = yazu->buffer_height / 2.0f;
@@ -893,15 +938,10 @@ static void process_sliding(struct yazu *yazu, uint32_t time) {
 	}
 }
 
-static bool approximately_equals(double a, double b) {
-	return fabs(a - b) < 1.0e-6;
-}
-
 static void process_animations(struct yazu *yazu, uint32_t time) {
 	process_zooming(yazu, time);
 	process_sliding(yazu, time);
 }
-
 
 static void destroy_pointer(struct yazu_seat *seat) {
 	if (seat->wl_pointer) {
@@ -983,7 +1023,7 @@ static void initialize_egl_surface(struct yazu *yazu) {
 	EGLAttrib attributes[1] = { EGL_NONE };
 	EGLBoolean result;
 	yazu->wl_egl_window = wl_egl_window_create(yazu->wl_surface,
-		yazu->capture.buffer_width, yazu->capture.buffer_height);
+		yazu->buffer_width, yazu->buffer_height);
 	assert(yazu->wl_egl_window);
 	yazu->egl_surface = eglCreatePlatformWindowSurface(yazu->egl.display,
 		yazu->egl.config, yazu->wl_egl_window, attributes);
@@ -991,7 +1031,7 @@ static void initialize_egl_surface(struct yazu *yazu) {
 	result = eglMakeCurrent(yazu->egl.display, yazu->egl_surface,
 		yazu->egl_surface, yazu->egl.context);
 	assert(result == EGL_TRUE);
-	eglSwapInterval(yazu->egl.display, 1);
+	eglSwapInterval(yazu->egl.display, 0);
 }
 
 static void terminate_egl_surface(struct yazu *yazu) {
@@ -1003,6 +1043,85 @@ static void terminate_egl_surface(struct yazu *yazu) {
 	result = eglDestroySurface(yazu->egl.display, yazu->egl_surface);
 	assert(result == EGL_TRUE);
 	wl_egl_window_destroy(yazu->wl_egl_window);
+}
+
+static GLuint build_shader(const char *source, GLenum shader_type) {
+	GLuint shader;
+	GLint status;
+
+	shader = glCreateShader(shader_type);
+	assert(shader);
+	glShaderSource(shader, 1, &source, NULL);
+	glCompileShader(shader);
+
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+	if (status != GL_TRUE) {
+		const size_t log_max_length = 1024;
+		char log[log_max_length];
+		GLsizei log_length;
+		glGetShaderInfoLog(shader, log_max_length, &log_length, log);
+		fprintf(stderr, "error while compiling %s shader: %.*s\n",
+			shader_type == GL_VERTEX_SHADER ? "vertex" : "fragment",
+			log_length, log);
+
+		return 0;
+	}
+
+	return shader;
+}
+
+static bool initialize_gl(struct yazu *yazu) {
+	struct yazu_capture *capture = &yazu->capture;
+	GLuint vertex_shader, fragment_shader, program, capture_texture;
+	GLint status;
+
+	vertex_shader = build_shader(vertex_shader_string, GL_VERTEX_SHADER);
+	fragment_shader = build_shader(fragment_shader_string, GL_FRAGMENT_SHADER);
+	if (vertex_shader == 0 || fragment_shader == 0) {
+		return false;
+	}
+
+	program = glCreateProgram();
+	if (program == 0) {
+		return false;
+	}
+
+	glAttachShader(program, vertex_shader);
+	glAttachShader(program, fragment_shader);
+	glLinkProgram(program);
+
+	glGetProgramiv(program, GL_LINK_STATUS, &status);
+	if (status != GL_TRUE) {
+		const size_t log_max_length = 1024;
+		char log[log_max_length];
+		GLsizei log_length;
+		glGetProgramInfoLog(program, log_max_length, &log_length, log);
+		fprintf(stderr, "error while linking program: %.*s\n",
+			log_length, log);
+
+		return false;
+	}
+
+	glUseProgram(program);
+
+	yazu->gl.vertex_position = 0;
+	yazu->gl.texture_position = 1;
+	glBindAttribLocation(program, yazu->gl.vertex_position, "vertex_position");
+	glBindAttribLocation(program, yazu->gl.texture_position, "texture_position");
+
+	glActiveTexture(GL_TEXTURE0);
+	glGenTextures(1, &capture_texture);
+	glBindTexture(GL_TEXTURE_2D, capture_texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, capture->buffer_width,
+		capture->buffer_height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+		capture->buffer->data);
+	glUniform1i(glGetUniformLocation(program, "capture_texture"), GL_TEXTURE0);
+
+	glViewport(0, 0, yazu->buffer_width, yazu->buffer_height);
+
+	return true;
 }
 
 int main(int argc, char **argv) {
@@ -1043,12 +1162,14 @@ int main(int argc, char **argv) {
 	verify_global_object_exists(wl_shm);
 	verify_global_object_exists(wp_viewporter);
 	verify_global_object_exists(wp_cursor_shape_manager);
+	verify_global_object_exists(wp_single_pixel_buffer_manager);
 	verify_global_object_exists(ext_image_copy_capture_manager);
 	verify_global_object_exists(ext_output_image_capture_source_manager);
 	verify_global_object_exists(zwlr_layer_shell);
 	if (unsupported_compositor) {
 		goto cleanup_bindings;
 	}
+#undef verify_global_object_exists
 
 	// roundtrip for supported shm formats
 	wl_display_roundtrip(display);
@@ -1082,15 +1203,42 @@ int main(int argc, char **argv) {
 	if (!yazu.running || num_dispatched == -1) {
 		goto cleanup;
 	}
+
 	assert(yazu.capture.frame_ready);
 
 	initialize_egl_surface(&yazu);
-	while (yazu.running &&
-			(num_dispatched = wl_display_dispatch_pending(display)) != -1) {
-		// TODO: REMOVE THIS!
-		wl_display_dispatch(display);
-		// render here
+	if (!initialize_gl(&yazu)) {
+		yazu.failed = true;
+
+		goto terminate_egl_surface;
 	}
+
+	yazu.gl_initialized = true;
+
+	// only setup pointer listeners once we have the capture otherwise it's
+	// impossible to know where on the capture the pointer is
+	struct yazu_seat *seat;
+	wl_list_for_each(seat, &yazu.seats, link) {
+		if (!seat->wl_pointer) {
+			continue;
+		}
+
+		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
+	}
+
+	set_dirty(&yazu);
+
+	// call setup_viewport_source after set_dirty (which commits on the
+	// surface) to make sure surface isn't commited in between
+	// setup_viewport_source and buffer attatch otherwise a viewport error
+	// is raised because the source is out of bounds
+	setup_viewport_source(&yazu, 0, 0, yazu.buffer_width, yazu.buffer_height);
+
+	while (yazu.running &&
+			(num_dispatched = wl_display_dispatch(display)) != -1) {
+	}
+
+terminate_egl_surface:
 	terminate_egl_surface(&yazu);
 
 cleanup:
@@ -1118,7 +1266,7 @@ cleanup_bindings:
 	destroy_global_object_if_exists(ext_output_image_capture_source_manager, _v1);
 	destroy_global_object_if_exists(ext_image_copy_capture_manager, _v1);
 	wl_array_release(&yazu.compositor_supported_shm_formats);
-	struct yazu_seat *seat, *seat_tmp;
+	struct yazu_seat *seat_tmp;
 	wl_list_for_each_safe(seat, seat_tmp, &yazu.seats, link) {
 		wl_list_remove(&seat->link);
 		wl_array_release(&seat->motion_events);
@@ -1134,8 +1282,10 @@ cleanup_bindings:
 	}
 	destroy_global_object_if_exists(wp_viewporter,);
 	destroy_global_object_if_exists(wp_cursor_shape_manager, _v1);
+	destroy_global_object_if_exists(wp_single_pixel_buffer_manager, _v1);
 	destroy_global_object_if_exists(wl_shm,);
 	destroy_global_object_if_exists(wl_compositor,);
+#undef destroy_global_object_if_exists
 	wl_registry_destroy(wl_registry);
 
 	// ensure all queued requests have been received by server
