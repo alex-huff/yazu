@@ -89,6 +89,10 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
+	if (!yazu->gl_initialized) {
+		return;
+	}
+
 	seat->cursor_x = wl_fixed_to_double(surface_x) * yazu->scale_x;
 	seat->cursor_y = wl_fixed_to_double(surface_y) * yazu->scale_y;
 	if (seat->dragging) {
@@ -169,6 +173,10 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
+	if (!yazu->gl_initialized) {
+		return;
+	}
+
 	seat->button_state = button_state;
 	seat->last_button = button;
 	switch (button) {
@@ -207,6 +215,10 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
 	assert(seat->pointer_on_surface);
+	if (!yazu->gl_initialized) {
+		return;
+	}
+
 	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) {
 		return;
 	}
@@ -251,9 +263,7 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 	if (seat->wl_pointer == NULL && has_pointer) {
 		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
 		assert(seat->wl_pointer);
-		if (yazu->gl_initialized) {
-			wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
-		}
+		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
 		seat->wp_cursor_shape_device =
 			wp_cursor_shape_manager_v1_get_pointer(
 				yazu->wp_cursor_shape_manager,
@@ -1214,18 +1224,6 @@ int main(int argc, char **argv) {
 	}
 
 	yazu.gl_initialized = true;
-
-	// only setup pointer listeners once we have the capture otherwise it's
-	// impossible to know where on the capture the pointer is
-	struct yazu_seat *seat;
-	wl_list_for_each(seat, &yazu.seats, link) {
-		if (!seat->wl_pointer) {
-			continue;
-		}
-
-		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
-	}
-
 	set_dirty(&yazu);
 
 	// call setup_viewport_source after set_dirty (which commits on the
@@ -1266,7 +1264,7 @@ cleanup_bindings:
 	destroy_global_object_if_exists(ext_output_image_capture_source_manager, _v1);
 	destroy_global_object_if_exists(ext_image_copy_capture_manager, _v1);
 	wl_array_release(&yazu.compositor_supported_shm_formats);
-	struct yazu_seat *seat_tmp;
+	struct yazu_seat *seat, *seat_tmp;
 	wl_list_for_each_safe(seat, seat_tmp, &yazu.seats, link) {
 		wl_list_remove(&seat->link);
 		wl_array_release(&seat->motion_events);
