@@ -398,12 +398,8 @@ static void ext_image_copy_capture_frame_handle_ready(void *data,
 	struct yazu_capture *capture = data;
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 	struct yazu_buffer *buffer = capture->buffer;
-	uint32_t byte_order = capture->byte_order;
 
-	if (byte_order != DEFAULT_BYTE_ORDER) {
-		reorder_bytes(buffer->data, buffer->size, byte_order);
-	}
-
+	reorder_bytes(buffer->data, buffer->size, capture->byte_order);
 	capture->frame_ready = true;
 	recompute_dimensions(yazu);
 }

@@ -20,6 +20,7 @@ void reorder_bytes(uint32_t *data, size_t data_size, uint8_t byte_order) {
 			(right_shift(data[i], byte_shift_1) & 0x0000FF00u) |
 			(right_shift(data[i], byte_shift_2) & 0x00FF0000u) |
 			(right_shift(data[i], byte_shift_3) & 0xFF000000u);
+		data[i] |= 0xFF000000u;
 	}
 }
 
