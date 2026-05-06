@@ -281,6 +281,25 @@ static const struct wl_seat_listener seat_listener = {
 
 // END SEAT
 
+// BEGIN OUTPUT
+
+static void output_handle_geometry(void *data, struct wl_output *wl_output,
+		int32_t x, int32_t y, int32_t physical_width, int32_t physical_height,
+		int32_t subpixel, const char *make, const char *model,
+		int32_t transform) {
+}
+
+static void output_handle_mode(void *data, struct wl_output *wl_output,
+		uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
+}
+
+static const struct wl_output_listener output_listener = {
+	.geometry = output_handle_geometry,
+	.mode = output_handle_mode,
+};
+
+// END OUTPUT
+
 // BEGIN SHM
 
 static void shm_handle_format(void *data, struct wl_shm *wl_shm,
@@ -333,6 +352,7 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 			name, &wl_output_interface, 1);
 		assert(wl_output);
 		output->wl_output = wl_output;
+		wl_output_add_listener(wl_output, &output_listener, output);
 		wl_list_insert(&yazu->outputs, &output->link);
 	} else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
 		yazu->wp_viewporter = wl_registry_bind(wl_registry, name,
@@ -379,6 +399,7 @@ static const struct wl_registry_listener registry_listener = {
 
 static void ext_image_copy_capture_frame_handle_transform(void *data,
 		struct ext_image_copy_capture_frame_v1 *frame, uint32_t transform) {
+	// TODO: do we care about this?
 	struct yazu_capture *capture = data;
 	capture->transform = transform;
 }
