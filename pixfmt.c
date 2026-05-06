@@ -65,11 +65,10 @@ static uint8_t big_endian_rgbx_byte_order(enum wl_shm_format shm_format) {
 	}
 }
 
+// Is byte reordering enough? If the capture can be transparent, this doesn't
+// work because the r, g, and b channels are premultiplied so we need to divide
+// them by alpha before dropping the alpha channel.
 void reorder_bytes_to_big_endian_rgbx(uint32_t *data, size_t data_size, enum wl_shm_format shm_format) {
-	// TODO: Is byte reordering enough?
-	// If the capture can have alpha, this doesn't work because the r, g,
-	// and b channels are premultiplied so we need to divide them by alpha
-	// before dropping the alpha channel.
 	uint8_t byte_order = big_endian_rgbx_byte_order(shm_format);
 	int8_t byte_shift_1 = ((int8_t) ((byte_order & 0b00001100u) >> 2) - 1) * 8;
 	int8_t byte_shift_2 = ((int8_t) ((byte_order & 0b00110000u) >> 4) - 2) * 8;
