@@ -399,7 +399,8 @@ static void ext_image_copy_capture_frame_handle_ready(void *data,
 	struct yazu *yazu = wl_container_of(capture, yazu, capture);
 	struct yazu_buffer *buffer = capture->buffer;
 
-	to_big_endian_rgbx(buffer->data, buffer->size, capture->byte_order);
+	reorder_bytes_to_big_endian_rgbx(buffer->data, buffer->size,
+		capture->shm_format);
 	capture->frame_ready = true;
 	recompute_dimensions(yazu);
 }
@@ -454,11 +455,9 @@ static void ext_image_copy_capture_session_handle_shm_format(void *data,
 		return;
 	}
 
-	uint32_t byte_order;
 	if (compositor_is_shm_format_supported(yazu, shm_format) &&
-			(byte_order = client_is_shm_format_supported(shm_format))) {
+			client_is_shm_format_supported(shm_format)) {
 		capture->shm_format = shm_format;
-		capture->byte_order = byte_order;
 		capture->has_shm_format = true;
 	}
 }
