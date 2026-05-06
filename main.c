@@ -85,6 +85,42 @@ static void pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
 	seat->pointer_on_surface = false;
 }
 
+static double surface_xy_to_buffer_x(struct yazu *yazu, double surface_x, double surface_y) {
+	switch (yazu->transform) {
+	case WL_OUTPUT_TRANSFORM_NORMAL:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
+		return surface_x * yazu->scale_x;
+	case WL_OUTPUT_TRANSFORM_180:
+	case WL_OUTPUT_TRANSFORM_FLIPPED:
+		return (yazu->width - surface_x) * yazu->scale_x;
+	case WL_OUTPUT_TRANSFORM_90:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
+		return surface_y * yazu->scale_y;
+	case WL_OUTPUT_TRANSFORM_270:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
+		return (yazu->height - surface_y) * yazu->scale_y;
+	}
+	assert(false);
+}
+
+static double surface_xy_to_buffer_y(struct yazu *yazu, double surface_x, double surface_y) {
+	switch (yazu->transform) {
+	case WL_OUTPUT_TRANSFORM_NORMAL:
+	case WL_OUTPUT_TRANSFORM_FLIPPED:
+		return surface_y * yazu->scale_y;
+	case WL_OUTPUT_TRANSFORM_180:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
+		return (yazu->height - surface_y) * yazu->scale_y;
+	case WL_OUTPUT_TRANSFORM_90:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
+		return (yazu->width - surface_x) * yazu->scale_x;
+	case WL_OUTPUT_TRANSFORM_270:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
+		return surface_x * yazu->scale_x;
+	}
+	assert(false);
+}
+
 static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y) {
 	struct yazu_seat *seat = data;
@@ -94,8 +130,11 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		return;
 	}
 
-	seat->cursor_x = wl_fixed_to_double(surface_x) * yazu->scale_x;
-	seat->cursor_y = wl_fixed_to_double(surface_y) * yazu->scale_y;
+	double surface_x_double, surface_y_double;
+	surface_x_double = wl_fixed_to_double(surface_x);
+	surface_y_double = wl_fixed_to_double(surface_y);
+	seat->cursor_x = surface_xy_to_buffer_x(yazu, surface_x_double, surface_y_double);
+	seat->cursor_y = surface_xy_to_buffer_y(yazu, surface_x_double, surface_y_double);
 	if (seat->dragging) {
 		double cursor_x_capture_space = buffer_x_to_capture_x(yazu, seat->cursor_x);
 		double cursor_y_capture_space = buffer_y_to_capture_y(yazu, seat->cursor_y);
@@ -287,6 +326,19 @@ static void output_handle_geometry(void *data, struct wl_output *wl_output,
 		int32_t x, int32_t y, int32_t physical_width, int32_t physical_height,
 		int32_t subpixel, const char *make, const char *model,
 		int32_t transform) {
+	struct yazu_output *output = data;
+	struct yazu *yazu = output->yazu;
+	if (output->transform == transform) {
+		return;
+	}
+
+	output->transform = transform;
+	if (yazu->captured_output == output) {
+		yazu->transform = transform;
+		recompute_dimensions(yazu);
+
+		set_dirty(yazu);
+	}
 }
 
 static void output_handle_mode(void *data, struct wl_output *wl_output,
@@ -348,6 +400,7 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 	} else if (strcmp(interface, wl_output_interface.name) == 0) {
 		struct yazu_output *output = calloc(1, sizeof(struct yazu_output));
 		assert(output);
+		output->yazu = yazu;
 		struct wl_output *wl_output = wl_registry_bind(wl_registry,
 			name, &wl_output_interface, 1);
 		assert(wl_output);
@@ -399,9 +452,6 @@ static const struct wl_registry_listener registry_listener = {
 
 static void ext_image_copy_capture_frame_handle_transform(void *data,
 		struct ext_image_copy_capture_frame_v1 *frame, uint32_t transform) {
-	// TODO: do we care about this?
-	struct yazu_capture *capture = data;
-	capture->transform = transform;
 }
 
 static void ext_image_copy_capture_frame_handle_damage(void *data,
@@ -561,10 +611,24 @@ static const struct ext_image_copy_capture_session_v1_listener ext_image_copy_ca
 
 // BEGIN SURFACE
 
+static struct yazu_output * yazu_output_from_wl_output(struct yazu *yazu, struct wl_output *wl_output) {
+	struct yazu_output *output;
+	wl_list_for_each(output, &yazu->outputs, link) {
+		if (output->wl_output == wl_output) {
+			return output;
+		}
+	}
+	assert(false);
+}
+
 static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
 		struct wl_output *wl_output) {
 	struct yazu *yazu = data;
+	struct yazu_output *output_to_capture = yazu_output_from_wl_output(yazu, wl_output);
 	assert(yazu->configured);
+	yazu->captured_output = output_to_capture;
+	yazu->transform = output_to_capture->transform;
+	recompute_dimensions(yazu);
 	uint32_t capture_options = 0;
 	// TODO: make this configurable
 	if (true) {
@@ -585,21 +649,9 @@ static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
 		struct wl_output *wl_output) {
 }
 
-#ifdef WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION
-static void surface_handle_preferred_buffer_scale(void *data, struct wl_surface *wl_surface, int32_t scale) {
-}
-
-static void surface_handle_preferred_buffer_transform(void *data, struct wl_surface *wl_surface, uint32_t transform) {
-}
-#endif
-
 static const struct wl_surface_listener surface_listener = {
 	.enter = surface_handle_enter,
 	.leave = surface_handle_leave,
-#ifdef WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION
-	.preferred_buffer_scale = surface_handle_preferred_buffer_scale,
-	.preferred_buffer_transform = surface_handle_preferred_buffer_transform,
-#endif
 };
 
 // END SURFACE
@@ -750,12 +802,16 @@ static void render(struct yazu *yazu) {
 	glClear(GL_COLOR_BUFFER_BIT);
 	glDrawElements(GL_TRIANGLES, sizeof(indices) / sizeof(GLushort),
 		GL_UNSIGNED_SHORT, indices);
-
-	eglSwapBuffers(yazu->egl.display, yazu->egl_surface);
 }
 
 static void send_frame(struct yazu *yazu) {
+	wl_surface_set_buffer_transform(yazu->wl_surface, yazu->transform);
+	setup_viewport_source(yazu, 0, 0, yazu->transformed_buffer_width,
+		yazu->transformed_buffer_height);
+
 	render(yazu);
+
+	eglSwapBuffers(yazu->egl.display, yazu->egl_surface);
 
 	yazu->dirty = yazu->sliding || yazu->zooming;
 }
@@ -809,6 +865,30 @@ static bool clamp_capture_target_y(struct yazu *yazu) {
 	return did_clamp;
 }
 
+static void get_transformed_buffer_dimensions(
+		enum wl_output_transform transform, uint32_t old_width,
+		uint32_t old_height, uint32_t *new_width, uint32_t *new_height) {
+	switch (transform) {
+	case WL_OUTPUT_TRANSFORM_NORMAL:
+	case WL_OUTPUT_TRANSFORM_180:
+	case WL_OUTPUT_TRANSFORM_FLIPPED:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
+		*new_width = old_width;
+		*new_height = old_height;
+
+		return;
+	case WL_OUTPUT_TRANSFORM_90:
+	case WL_OUTPUT_TRANSFORM_270:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
+		*new_width = old_height;
+		*new_height = old_width;
+
+		return;
+	}
+	assert(false);
+}
+
 static void recompute_dimensions(struct yazu *yazu) {
 	struct yazu_capture *capture = &yazu->capture;
 	if (capture->frame_ready) {
@@ -820,8 +900,11 @@ static void recompute_dimensions(struct yazu *yazu) {
 	}
 	yazu->half_buffer_width = yazu->buffer_width / 2.0f;
 	yazu->half_buffer_height = yazu->buffer_height / 2.0f;
-	yazu->scale_x = ((double) yazu->buffer_width) / yazu->width;
-	yazu->scale_y = ((double) yazu->buffer_height) / yazu->height;
+	get_transformed_buffer_dimensions(yazu->transform, yazu->buffer_width,
+		yazu->buffer_height, &yazu->transformed_buffer_width,
+		&yazu->transformed_buffer_height);
+	yazu->scale_x = ((double) yazu->transformed_buffer_width) / yazu->width;
+	yazu->scale_y = ((double) yazu->transformed_buffer_height) / yazu->height;
 }
 
 static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time) {
@@ -1164,8 +1247,6 @@ int main(int argc, char **argv) {
 	bool ret_code = EXIT_FAILURE;
 	struct yazu yazu = {
 		.running = true,
-		.scale_x = 1,
-		.scale_y = 1,
 		.zoom_percent = 100,
 		.zoom_target_percent = 100,
 		.zoom_scale = 1,
@@ -1251,12 +1332,6 @@ int main(int argc, char **argv) {
 
 	yazu.gl_initialized = true;
 	set_dirty(&yazu);
-
-	// call setup_viewport_source after set_dirty (which commits on the
-	// surface) to make sure surface isn't commited in between
-	// setup_viewport_source and buffer attatch otherwise a viewport error
-	// is raised because the source is out of bounds
-	setup_viewport_source(&yazu, 0, 0, yazu.buffer_width, yazu.buffer_height);
 
 	while (yazu.running &&
 			(num_dispatched = wl_display_dispatch(display)) != -1) {

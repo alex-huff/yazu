@@ -41,7 +41,6 @@ struct yazu_capture {
 	enum wl_shm_format shm_format;
 
 	uint32_t buffer_width, buffer_height;
-	enum wl_output_transform transform;
 
 	bool capture_started;
 	bool frame_ready;
@@ -82,6 +81,7 @@ struct yazu {
 	} gl;
 
 	struct yazu_buffer *buffers[2];
+	struct yazu_output *captured_output;
 	struct yazu_capture capture;
 
 	bool dragging;
@@ -107,16 +107,19 @@ struct yazu {
 	bool configured;
 	bool dirty;
 
+	enum wl_output_transform transform;
 	double scale_x, scale_y;
 	uint32_t width, height;
 	uint32_t buffer_width, buffer_height;
 	double half_buffer_width, half_buffer_height;
+	uint32_t transformed_buffer_width, transformed_buffer_height;
 	double zoom_scale, zoom_percent;
 };
 
 struct yazu_seat {
 	struct yazu *yazu;
 	struct wl_list link;
+
 	struct wl_seat *wl_seat;
 	struct wl_pointer *wl_pointer;
 	struct wp_cursor_shape_device_v1 *wp_cursor_shape_device;
@@ -133,8 +136,12 @@ struct yazu_seat {
 };
 
 struct yazu_output {
+	struct yazu *yazu;
 	struct wl_list link;
+
 	struct wl_output *wl_output;
+
+	enum wl_output_transform transform;
 };
 
 #endif
