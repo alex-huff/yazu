@@ -675,6 +675,7 @@ static void layer_surface_handle_configure(void *data,
 		yazu->height = height;
 		wp_viewport_set_destination(yazu->wp_viewport, yazu->width, yazu->height);
 		recompute_dimensions(yazu);
+
 		set_dirty(yazu);
 	}
 	if (!dimensions_changed || yazu->gl_initialized) {
@@ -1336,6 +1337,7 @@ int main(int argc, char **argv) {
 	}
 
 	yazu.gl_initialized = true;
+
 	set_dirty(&yazu);
 
 	while (yazu.running &&
@@ -1352,8 +1354,6 @@ cleanup:
 	zwlr_layer_surface_v1_destroy(yazu.layer_surface);
 	wl_surface_destroy(yazu.wl_surface);
 	wp_viewport_destroy(yazu.wp_viewport);
-	destroy_buffer(yazu.buffers[0]);
-	destroy_buffer(yazu.buffers[1]);
 
 	if (yazu.surface_frame_callback) {
 		wl_callback_destroy(yazu.surface_frame_callback);

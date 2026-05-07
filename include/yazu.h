@@ -80,12 +80,8 @@ struct yazu {
 		GLuint vertex_position, texture_position;
 	} gl;
 
-	struct yazu_buffer *buffers[2];
 	struct yazu_output *captured_output;
 	struct yazu_capture capture;
-
-	bool dragging;
-
 
 	bool sliding;
 	uint32_t slide_last_tick_time;
@@ -99,14 +95,14 @@ struct yazu {
 	double zoom_target_percent;
 	struct yazu_seat *zoom_seat;
 
-	double capture_target_x, capture_target_y;
-
 	bool gl_initialized;
 	bool running;
 	bool failed;
 	bool configured;
 	bool dirty;
+	bool dragging;
 
+	double capture_target_x, capture_target_y;
 	enum wl_output_transform transform;
 	double scale_x, scale_y;
 	uint32_t width, height;

@@ -67,7 +67,7 @@ static const struct wl_buffer_listener buffer_listener = {
 struct yazu_buffer *create_buffer(struct wl_shm *wl_shm, uint32_t width,
 		uint32_t height, enum wl_shm_format shm_format) {
 	// only 32-bit 8888 formats are supported for now
-	if (client_is_shm_format_supported(shm_format) == 0) {
+	if (!client_is_shm_format_supported(shm_format)) {
 		return NULL;
 	}
 
@@ -119,28 +119,4 @@ void destroy_buffer(struct yazu_buffer *buffer) {
 	wl_buffer_destroy(buffer->wl_buffer);
 	munmap(buffer->data, buffer->size);
 	free(buffer);
-}
-
-struct yazu_buffer *get_available_buffer(struct wl_shm *wl_shm,
-		struct yazu_buffer **buffers, uint8_t num_buffers,
-		uint32_t width, uint32_t height) {
-	size_t i;
-	for (i = 0; i < num_buffers; i++) {
-		if (buffers[i] == NULL || !buffers[i]->busy) {
-			break;
-		}
-	}
-	if (i == num_buffers) {
-		return NULL;
-	}
-
-	if (buffers[i] && (buffers[i]->width != width || buffers[i]->height != height)) {
-		destroy_buffer(buffers[i]);
-		buffers[i] = NULL;
-	}
-	if (buffers[i] == NULL) {
-		buffers[i] = create_buffer(wl_shm, width, height, WL_SHM_FORMAT_ARGB8888);
-	}
-
-	return buffers[i];
 }
