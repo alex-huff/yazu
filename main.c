@@ -121,7 +121,7 @@ static double surface_xy_to_buffer_y(struct yazu *yazu, double surface_x, double
 	assert(false);
 }
 
-static double get_buffer_xy_from_surface_xy(struct yazu *yazu,
+static void get_buffer_xy_from_surface_xy(struct yazu *yazu,
 		double surface_x, double surface_y,
 		double *buffer_x, double *buffer_y) {
 	*buffer_x = surface_xy_to_buffer_x(yazu, surface_x, surface_y);
