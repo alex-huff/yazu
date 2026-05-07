@@ -121,6 +121,13 @@ static double surface_xy_to_buffer_y(struct yazu *yazu, double surface_x, double
 	assert(false);
 }
 
+static double get_buffer_xy_from_surface_xy(struct yazu *yazu,
+		double surface_x, double surface_y,
+		double *buffer_x, double *buffer_y) {
+	*buffer_x = surface_xy_to_buffer_x(yazu, surface_x, surface_y);
+	*buffer_y = surface_xy_to_buffer_y(yazu, surface_x, surface_y);
+}
+
 static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y) {
 	struct yazu_seat *seat = data;
@@ -130,11 +137,9 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		return;
 	}
 
-	double surface_x_double, surface_y_double;
-	surface_x_double = wl_fixed_to_double(surface_x);
-	surface_y_double = wl_fixed_to_double(surface_y);
-	seat->cursor_x = surface_xy_to_buffer_x(yazu, surface_x_double, surface_y_double);
-	seat->cursor_y = surface_xy_to_buffer_y(yazu, surface_x_double, surface_y_double);
+	get_buffer_xy_from_surface_xy(yazu,
+		wl_fixed_to_double(surface_x), wl_fixed_to_double(surface_y),
+		&seat->cursor_x, &seat->cursor_y);
 	if (seat->dragging) {
 		double cursor_x_capture_space = buffer_x_to_capture_x(yazu, seat->cursor_x);
 		double cursor_y_capture_space = buffer_y_to_capture_y(yazu, seat->cursor_y);
