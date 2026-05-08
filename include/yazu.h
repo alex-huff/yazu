@@ -104,7 +104,7 @@ struct yazu {
 
 	double capture_target_x, capture_target_y;
 	enum wl_output_transform transform;
-	double scale_x, scale_y;
+	double buffer_scale_x, buffer_scale_y;
 	uint32_t width, height;
 	uint32_t buffer_width, buffer_height;
 	double half_buffer_width, half_buffer_height;

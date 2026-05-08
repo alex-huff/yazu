@@ -89,16 +89,16 @@ static double surface_xy_to_buffer_x(struct yazu *yazu, double surface_x, double
 	switch (yazu->transform) {
 	case WL_OUTPUT_TRANSFORM_NORMAL:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
-		return surface_x * yazu->scale_x;
+		return surface_x * yazu->buffer_scale_x;
 	case WL_OUTPUT_TRANSFORM_180:
 	case WL_OUTPUT_TRANSFORM_FLIPPED:
-		return (yazu->width - surface_x) * yazu->scale_x;
+		return (yazu->width - surface_x) * yazu->buffer_scale_x;
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-		return surface_y * yazu->scale_y;
+		return surface_y * yazu->buffer_scale_y;
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		return (yazu->height - surface_y) * yazu->scale_y;
+		return (yazu->height - surface_y) * yazu->buffer_scale_y;
 	}
 	assert(false);
 }
@@ -107,16 +107,16 @@ static double surface_xy_to_buffer_y(struct yazu *yazu, double surface_x, double
 	switch (yazu->transform) {
 	case WL_OUTPUT_TRANSFORM_NORMAL:
 	case WL_OUTPUT_TRANSFORM_FLIPPED:
-		return surface_y * yazu->scale_y;
+		return surface_y * yazu->buffer_scale_y;
 	case WL_OUTPUT_TRANSFORM_180:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
-		return (yazu->height - surface_y) * yazu->scale_y;
+		return (yazu->height - surface_y) * yazu->buffer_scale_y;
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		return (yazu->width - surface_x) * yazu->scale_x;
+		return (yazu->width - surface_x) * yazu->buffer_scale_x;
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-		return surface_x * yazu->scale_x;
+		return surface_x * yazu->buffer_scale_x;
 	}
 	assert(false);
 }
@@ -203,7 +203,10 @@ static void handle_drag_release(struct yazu* yazu, struct yazu_seat* seat, uint3
 		squared_distance(
 			yazu->slide_x_velocity,
 			yazu->slide_y_velocity));
-	double acceleration_magnitude = -0.01 / real_zoom_scale(yazu);
+	double estimated_output_scale = sqrt(
+		yazu->buffer_scale_x * yazu->buffer_scale_y);
+	double acceleration_magnitude =
+		(-0.01 * estimated_output_scale) / real_zoom_scale(yazu);
 	yazu->slide_x_acceleration =
 		acceleration_magnitude * (yazu->slide_x_velocity / slide_velocity);
 	yazu->slide_y_acceleration =
@@ -811,6 +814,7 @@ static void render(struct yazu *yazu) {
 }
 
 static void send_frame(struct yazu *yazu) {
+	// TODO: Is it worth only calling these functions if necessary?
 	wl_surface_set_buffer_transform(yazu->wl_surface, yazu->transform);
 	setup_viewport_source(yazu, 0, 0, yazu->transformed_buffer_width,
 		yazu->transformed_buffer_height);
@@ -909,8 +913,10 @@ static void recompute_dimensions(struct yazu *yazu) {
 	get_transformed_buffer_dimensions(yazu->transform, yazu->buffer_width,
 		yazu->buffer_height, &yazu->transformed_buffer_width,
 		&yazu->transformed_buffer_height);
-	yazu->scale_x = ((double) yazu->transformed_buffer_width) / yazu->width;
-	yazu->scale_y = ((double) yazu->transformed_buffer_height) / yazu->height;
+	yazu->buffer_scale_x =
+		((double) yazu->transformed_buffer_width) / yazu->width;
+	yazu->buffer_scale_y =
+		((double) yazu->transformed_buffer_height) / yazu->height;
 }
 
 static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time) {
