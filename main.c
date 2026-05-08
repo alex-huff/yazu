@@ -203,10 +203,8 @@ static void handle_drag_release(struct yazu* yazu, struct yazu_seat* seat, uint3
 		squared_distance(
 			yazu->slide_x_velocity,
 			yazu->slide_y_velocity));
-	double estimated_output_scale = sqrt(
-		yazu->buffer_scale_x * yazu->buffer_scale_y);
 	double acceleration_magnitude =
-		(-0.01 * estimated_output_scale) / real_zoom_scale(yazu);
+		(-0.01 * yazu->estimated_output_scale) / real_zoom_scale(yazu);
 	yazu->slide_x_acceleration =
 		acceleration_magnitude * (yazu->slide_x_velocity / slide_velocity);
 	yazu->slide_y_acceleration =
@@ -917,6 +915,8 @@ static void recompute_dimensions(struct yazu *yazu) {
 		((double) yazu->transformed_buffer_width) / yazu->width;
 	yazu->buffer_scale_y =
 		((double) yazu->transformed_buffer_height) / yazu->height;
+	yazu->estimated_output_scale = sqrt(
+		yazu->buffer_scale_x * yazu->buffer_scale_y);
 }
 
 static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time) {

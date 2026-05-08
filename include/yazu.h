@@ -109,6 +109,7 @@ struct yazu {
 	uint32_t buffer_width, buffer_height;
 	double half_buffer_width, half_buffer_height;
 	uint32_t transformed_buffer_width, transformed_buffer_height;
+	double estimated_output_scale;
 	double zoom_scale, zoom_percent;
 };
 
