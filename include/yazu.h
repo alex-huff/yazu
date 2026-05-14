@@ -25,12 +25,6 @@
 #include "ext-image-capture-source-v1-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
-struct yazu_input_sample {
-	double x;
-	double y;
-	uint32_t time;
-};
-
 struct yazu_capture {
 	struct ext_image_copy_capture_session_v1 *ext_image_copy_capture_session;
 	struct ext_image_copy_capture_frame_v1 *ext_image_copy_capture_frame;
@@ -126,6 +120,17 @@ struct yazu_touch_event {
 	wl_fixed_t x, y;
 };
 
+struct yazu_input_motion_event {
+	double x;
+	double y;
+	uint32_t time;
+};
+
+struct yazu_touch_point {
+	int32_t id;
+	struct wl_array motion_events;
+};
+
 struct yazu_seat {
 	struct yazu *yazu;
 	struct wl_list link;
@@ -150,6 +155,10 @@ struct yazu_seat {
 	// touch
 	struct wl_touch *wl_touch;
 	struct wl_array wl_touch_events;
+
+	struct wl_array touch_points;
+
+	bool touch_dragging;
 };
 
 struct yazu_output {
