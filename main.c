@@ -46,10 +46,10 @@ static void destroy_touch(struct yazu_seat *yazu_seat);
 
 // BEGIN POINTER
 
-static void pointer_set_shape(struct yazu *yazu, struct yazu_seat *seat,
+static void pointer_set_shape(struct yazu_seat *seat,
 		struct wl_pointer *wl_pointer, uint32_t serial) {
 	enum wp_cursor_shape_device_v1_shape shape =
-		yazu->dragging ?
+		seat->pointer_dragging ?
 		WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING :
 		WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB;
 	wp_cursor_shape_device_v1_set_shape(seat->wp_cursor_shape_device,
@@ -60,10 +60,9 @@ static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 		uint32_t serial, struct wl_surface *surface,
 		wl_fixed_t surface_x, wl_fixed_t surface_y) {
 	struct yazu_seat *seat = data;
-	struct yazu *yazu = seat->yazu;
 	assert(!seat->pointer_on_surface);
 	seat->pointer_on_surface = true;
-	pointer_set_shape(yazu, seat, wl_pointer, serial);
+	pointer_set_shape(seat, wl_pointer, serial);
 }
 
 static void pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
@@ -128,7 +127,7 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 	get_buffer_xy_from_surface_xy(yazu,
 		wl_fixed_to_double(surface_x), wl_fixed_to_double(surface_y),
 		&seat->cursor_x, &seat->cursor_y);
-	if (seat->dragging) {
+	if (seat->pointer_dragging) {
 		double cursor_x_capture_space = buffer_x_to_capture_x(yazu, seat->cursor_x);
 		double cursor_y_capture_space = buffer_y_to_capture_y(yazu, seat->cursor_y);
 		double cursor_grab_diff_x = seat->capture_grab_x - cursor_x_capture_space;
@@ -140,11 +139,11 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		set_dirty(yazu);
 	}
 
-	struct wl_array *motion_events = &seat->motion_events;
-	size_t old_motion_events_size = motion_events->size;
-	wl_array_add(motion_events, sizeof(struct yazu_mouse_sample));
-	struct yazu_mouse_sample *first = motion_events->data;
-	memmove(first + 1, first, old_motion_events_size);
+	struct wl_array *pointer_motion_events = &seat->pointer_motion_events;
+	size_t old_pointer_motion_events_size = pointer_motion_events->size;
+	wl_array_add(pointer_motion_events, sizeof(struct yazu_input_sample));
+	struct yazu_input_sample *first = pointer_motion_events->data;
+	memmove(first + 1, first, old_pointer_motion_events_size);
 	first->x = seat->cursor_x;
 	first->y = seat->cursor_y;
 	first->time = time;
@@ -155,13 +154,13 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 static void handle_drag_release(struct yazu* yazu, struct yazu_seat* seat, uint32_t time) {
 	trim_old_mouse_samples(seat, time);
 
-	struct wl_array *motion_events_array = &seat->motion_events;
-	size_t num_events = motion_events_array->size / sizeof(struct yazu_mouse_sample);
-	struct yazu_mouse_sample *motion_events = motion_events_array->data;
+	struct wl_array *pointer_motion_events_array = &seat->pointer_motion_events;
+	size_t num_events = pointer_motion_events_array->size / sizeof(struct yazu_input_sample);
+	struct yazu_input_sample *pointer_motion_events = pointer_motion_events_array->data;
 
-	struct yazu_mouse_sample *first, *last;
-	first = motion_events + (num_events - 1);
-	last = motion_events;
+	struct yazu_input_sample *first, *last;
+	first = pointer_motion_events + (num_events - 1);
+	last = pointer_motion_events;
 
 	uint32_t dt = last->time - first->time;
 	if (dt <= 0) {
@@ -219,17 +218,17 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 		if (!yazu->dragging && is_pressed) {
 			yazu->sliding = false;
 			yazu->dragging = true;
-			seat->dragging = true;
+			seat->pointer_dragging = true;
 			seat->capture_grab_x = buffer_x_to_capture_x(yazu, seat->cursor_x);
 			seat->capture_grab_y = buffer_y_to_capture_y(yazu, seat->cursor_y);
 
-			pointer_set_shape(yazu, seat, wl_pointer, serial);
-		} else if (seat->dragging && !is_pressed) {
+			pointer_set_shape(seat, wl_pointer, serial);
+		} else if (seat->pointer_dragging && !is_pressed) {
 			yazu->dragging = false;
-			seat->dragging = false;
+			seat->pointer_dragging = false;
 
 			handle_drag_release(yazu, seat, time);
-			pointer_set_shape(yazu, seat, wl_pointer, serial);
+			pointer_set_shape(seat, wl_pointer, serial);
 		}
 
 		break;
@@ -289,29 +288,89 @@ static const struct wl_pointer_listener pointer_listener = {
 
 // BEGIN TOUCH
 
-static void touch_handle_down(void *data, struct wl_touch *wl_touch,
+static void touch_queue_event(struct yazu_seat *seat,
+		enum yazu_touch_event_type type, int32_t id, uint32_t time,
+		wl_fixed_t x, wl_fixed_t y) {
+	struct wl_array *touch_events = &seat->wl_touch_events;
+	wl_array_add(touch_events, sizeof(struct yazu_touch_event));
+	size_t num_touch_events = touch_events->size / sizeof(struct yazu_touch_event);
+	struct yazu_touch_event *last =
+		((struct yazu_touch_event *) touch_events->data) +
+		(num_touch_events - 1);
+	last->type = type;
+	last->id = id;
+	last->time = time;
+	last->x = x;
+	last->y = y;
+}
+
+static void touch_handle_down(struct yazu_seat *seat, int32_t id,
+		uint32_t time, double x, double y) {
+}
+
+static void touch_queue_handle_down(void *data, struct wl_touch *wl_touch,
 		uint32_t serial, uint32_t time, struct wl_surface *wl_surface,
 		int32_t id, wl_fixed_t x, wl_fixed_t y) {
+	struct yazu_seat *seat = data;
+	touch_queue_event(seat, DOWN, id, time, x, y);
 }
 
-static void touch_handle_up(void *data, struct wl_touch *wl_touch,
+static void touch_handle_up(struct yazu_seat *seat, int32_t id,
+		uint32_t time) {
+}
+
+static void touch_queue_handle_up(void *data, struct wl_touch *wl_touch,
 		uint32_t serial, uint32_t time, int32_t id) {
+	struct yazu_seat *seat = data;
+	touch_queue_event(seat, UP, id, time,
+		wl_fixed_from_int(0), wl_fixed_from_int(0));
 }
 
-static void touch_handle_motion(void *data, struct wl_touch *wl_touch,
+static void touch_handle_motion(struct yazu_seat *seat, int32_t id,
+		uint32_t time, double x, double y) {
+}
+
+static void touch_queue_handle_motion(void *data, struct wl_touch *wl_touch,
 		uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+	struct yazu_seat *seat = data;
+	touch_queue_event(seat, MOTION, id, time, x, y);
 }
 
 static void touch_handle_frame(void *data, struct wl_touch *wl_touch) {
+	struct yazu_seat *seat = data;
+
+	struct yazu_touch_event *event;
+	wl_array_for_each(event, &seat->wl_touch_events) {
+		double x, y;
+		x = wl_fixed_to_double(event->x);
+		y = wl_fixed_to_double(event->y);
+
+		switch(event->type) {
+		case DOWN:
+			touch_handle_down(seat, event->id, event->time, x, y);
+			break;
+		case UP:
+			touch_handle_up(seat, event->id, event->time);
+			break;
+		case MOTION:
+			touch_handle_motion(seat, event->id, event->time, x, y);
+			break;
+		}
+	}
+
+	seat->wl_touch_events.size = 0;
 }
 
 static void touch_handle_cancel(void *data, struct wl_touch *wl_touch) {
+	struct yazu_seat *seat = data;
+
+	seat->wl_touch_events.size = 0;
 }
 
 static const struct wl_touch_listener touch_listener = {
-	.down = touch_handle_down,
-	.up = touch_handle_up,
-	.motion = touch_handle_motion,
+	.down = touch_queue_handle_down,
+	.up = touch_queue_handle_up,
+	.motion = touch_queue_handle_motion,
 	.frame = touch_handle_frame,
 	.cancel = touch_handle_cancel,
 };
@@ -329,6 +388,7 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 	if (seat->wl_pointer == NULL && has_pointer) {
 		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
 		assert(seat->wl_pointer);
+		wl_array_init(&seat->pointer_motion_events);
 		wl_pointer_add_listener(seat->wl_pointer, &pointer_listener, seat);
 		seat->wp_cursor_shape_device =
 			wp_cursor_shape_manager_v1_get_pointer(
@@ -343,6 +403,7 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 	if (seat->wl_touch == NULL && has_touch) {
 		seat->wl_touch = wl_seat_get_touch(wl_seat);
 		assert(seat->wl_touch);
+		wl_array_init(&seat->wl_touch_events);
 		wl_touch_add_listener(seat->wl_touch, &touch_listener, seat);
 	} else if (seat->wl_touch && !has_touch) {
 		destroy_touch(seat);
@@ -429,7 +490,6 @@ static void registry_handle_global(void *data, struct wl_registry *wl_registry,
 			&wl_seat_interface, 1);
 		assert(wl_seat);
 		seat->wl_seat = wl_seat;
-		wl_array_init(&seat->motion_events);
 		wl_seat_add_listener(wl_seat, &seat_listener, seat);
 		wl_list_insert(&yazu->seats, &seat->link);
 	} else if (strcmp(interface, wl_output_interface.name) == 0) {
@@ -949,15 +1009,15 @@ static void recompute_dimensions(struct yazu *yazu) {
 }
 
 static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time) {
-	struct wl_array *motion_events = &seat->motion_events;
+	struct wl_array *pointer_motion_events = &seat->pointer_motion_events;
 
-	struct yazu_mouse_sample *mouse_sample;
+	struct yazu_input_sample *mouse_sample;
 	uint32_t elapsed_time;
-	for (size_t i = 0; i < motion_events->size; i += sizeof(struct yazu_mouse_sample)) {
-		mouse_sample = motion_events->data + i;
+	for (size_t i = 0; i < pointer_motion_events->size; i += sizeof(struct yazu_input_sample)) {
+		mouse_sample = pointer_motion_events->data + i;
 		elapsed_time = time - mouse_sample->time;
 		if (elapsed_time > SAMPLE_IS_OLD_THRESHOLD) {
-			motion_events->size = i;
+			pointer_motion_events->size = i;
 
 			break;
 		}
@@ -1110,12 +1170,14 @@ static void destroy_pointer(struct yazu_seat *seat) {
 	if (seat->wp_cursor_shape_device) {
 		wp_cursor_shape_device_v1_destroy(seat->wp_cursor_shape_device);
 	}
+	wl_array_release(&seat->pointer_motion_events);
 }
 
 static void destroy_touch(struct yazu_seat *seat) {
 	if (seat->wl_touch) {
 		wl_touch_destroy(seat->wl_touch);
 	}
+	wl_array_release(&seat->wl_touch_events);
 }
 
 static void destroy_capture(struct yazu_capture *capture) {
@@ -1414,7 +1476,6 @@ cleanup_bindings:
 	struct yazu_seat *seat, *seat_tmp;
 	wl_list_for_each_safe(seat, seat_tmp, &yazu.seats, link) {
 		wl_list_remove(&seat->link);
-		wl_array_release(&seat->motion_events);
 		destroy_pointer(seat);
 		destroy_touch(seat);
 		wl_seat_destroy(seat->wl_seat);
