@@ -27,34 +27,22 @@ static const char *fragment_shader_string =
 	"}\n";
 
 static void setup_surface_frame_callback(struct yazu *yazu);
-
-static void setup_viewport_source(struct yazu *yazu, uint32_t x, uint32_t y, uint32_t width, uint32_t height);
-
+static void setup_viewport_source(struct yazu *yazu, uint32_t x, uint32_t y,
+		uint32_t width, uint32_t height);
 static void set_dirty(struct yazu *yazu);
-
 static void send_frame(struct yazu *yazu);
-
 static double real_zoom_scale(struct yazu *yazu);
-
 static double buffer_x_to_capture_x(struct yazu *yazu, double buffer_x);
-
 static double buffer_y_to_capture_y(struct yazu *yazu, double buffer_y);
-
 static bool clamp_capture_target(struct yazu *yazu);
-
 static bool clamp_capture_target_x(struct yazu *yazu);
-
 static bool clamp_capture_target_y(struct yazu *yazu);
-
 static void recompute_dimensions(struct yazu *yazu);
-
 static void trim_old_mouse_samples(struct yazu_seat *seat, uint32_t time);
-
 static double squared_distance(double dx, double dy);
-
 static void process_animations(struct yazu *yazu, uint32_t time);
-
 static void destroy_pointer(struct yazu_seat *yazu_seat);
+static void destroy_touch(struct yazu_seat *yazu_seat);
 
 // BEGIN POINTER
 
@@ -299,12 +287,44 @@ static const struct wl_pointer_listener pointer_listener = {
 
 // END POINTER
 
+// BEGIN TOUCH
+
+static void touch_handle_down(void *data, struct wl_touch *wl_touch,
+		uint32_t serial, uint32_t time, struct wl_surface *wl_surface,
+		int32_t id, wl_fixed_t x, wl_fixed_t y) {
+}
+
+static void touch_handle_up(void *data, struct wl_touch *wl_touch,
+		uint32_t serial, uint32_t time, int32_t id) {
+}
+
+static void touch_handle_motion(void *data, struct wl_touch *wl_touch,
+		uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+}
+
+static void touch_handle_frame(void *data, struct wl_touch *wl_touch) {
+}
+
+static void touch_handle_cancel(void *data, struct wl_touch *wl_touch) {
+}
+
+static const struct wl_touch_listener touch_listener = {
+	.down = touch_handle_down,
+	.up = touch_handle_up,
+	.motion = touch_handle_motion,
+	.frame = touch_handle_frame,
+	.cancel = touch_handle_cancel,
+};
+
+// END TOUCH
+
 // BEGIN SEAT
 
 static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 		uint32_t capabilities) {
 	struct yazu_seat *seat = data;
 	struct yazu *yazu = seat->yazu;
+
 	bool has_pointer = capabilities & WL_SEAT_CAPABILITY_POINTER;
 	if (seat->wl_pointer == NULL && has_pointer) {
 		seat->wl_pointer = wl_seat_get_pointer(wl_seat);
@@ -317,6 +337,15 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 		assert(seat->wp_cursor_shape_device);
 	} else if (seat->wl_pointer && !has_pointer) {
 		destroy_pointer(seat);
+	}
+
+	bool has_touch = capabilities & WL_SEAT_CAPABILITY_TOUCH;
+	if (seat->wl_touch == NULL && has_touch) {
+		seat->wl_touch = wl_seat_get_touch(wl_seat);
+		assert(seat->wl_touch);
+		wl_touch_add_listener(seat->wl_touch, &touch_listener, seat);
+	} else if (seat->wl_touch && !has_touch) {
+		destroy_touch(seat);
 	}
 }
 
@@ -1083,6 +1112,12 @@ static void destroy_pointer(struct yazu_seat *seat) {
 	}
 }
 
+static void destroy_touch(struct yazu_seat *seat) {
+	if (seat->wl_touch) {
+		wl_touch_destroy(seat->wl_touch);
+	}
+}
+
 static void destroy_capture(struct yazu_capture *capture) {
 	if (capture->ext_image_copy_capture_frame) {
 		ext_image_copy_capture_frame_v1_destroy(capture->ext_image_copy_capture_frame);
@@ -1381,6 +1416,7 @@ cleanup_bindings:
 		wl_list_remove(&seat->link);
 		wl_array_release(&seat->motion_events);
 		destroy_pointer(seat);
+		destroy_touch(seat);
 		wl_seat_destroy(seat->wl_seat);
 		free(seat);
 	}
