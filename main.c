@@ -61,14 +61,19 @@ static void send_frame(struct yazu *yazu);
 static double real_zoom_scale(struct yazu *yazu);
 static double buffer_x_to_capture_x(struct yazu *yazu, double buffer_x);
 static double buffer_y_to_capture_y(struct yazu *yazu, double buffer_y);
-static bool clamp_capture_target(struct yazu *yazu);
 static bool clamp_capture_target_x(struct yazu *yazu);
 static bool clamp_capture_target_y(struct yazu *yazu);
+static bool clamp_capture_target(struct yazu *yazu);
+static void drag_capture(struct yazu *yazu,
+		double old_buffer_x, double old_buffer_y,
+		double buffer_x, double buffer_y);
 static void recompute_dimensions(struct yazu *yazu);
 static void trim_old_motion_events(struct wl_array *motion_events,
 		uint32_t time);
 static void add_motion_event(struct wl_array *motion_events, double x,
 		double y, uint32_t time);
+static void handle_drag_release(struct yazu* yazu,
+		struct wl_array *motion_events, uint32_t time);
 static double squared_distance(double dx, double dy);
 static void process_animations(struct yazu *yazu, uint32_t time);
 static void destroy_pointer(struct yazu_seat *yazu_seat);
@@ -107,16 +112,20 @@ static double surface_xy_to_buffer_x(struct yazu *yazu, double surface_x, double
 	case WL_OUTPUT_TRANSFORM_NORMAL:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
 		return surface_x * yazu->buffer_scale_x;
+
 	case WL_OUTPUT_TRANSFORM_180:
 	case WL_OUTPUT_TRANSFORM_FLIPPED:
 		return (yazu->width - surface_x) * yazu->buffer_scale_x;
+
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
 		return surface_y * yazu->buffer_scale_y;
+
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
 		return (yazu->height - surface_y) * yazu->buffer_scale_y;
 	}
+
 	assert(false);
 }
 
@@ -125,16 +134,20 @@ static double surface_xy_to_buffer_y(struct yazu *yazu, double surface_x, double
 	case WL_OUTPUT_TRANSFORM_NORMAL:
 	case WL_OUTPUT_TRANSFORM_FLIPPED:
 		return surface_y * yazu->buffer_scale_y;
+
 	case WL_OUTPUT_TRANSFORM_180:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
 		return (yazu->height - surface_y) * yazu->buffer_scale_y;
+
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
 		return (yazu->width - surface_x) * yazu->buffer_scale_x;
+
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
 		return surface_x * yazu->buffer_scale_x;
 	}
+
 	assert(false);
 }
 
@@ -154,71 +167,18 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		return;
 	}
 
+	double old_cursor_x = seat->cursor_x;
+	double old_cursor_y = seat->cursor_y;
 	get_buffer_xy_from_surface_xy(yazu,
 		wl_fixed_to_double(surface_x), wl_fixed_to_double(surface_y),
 		&seat->cursor_x, &seat->cursor_y);
-	if (seat->pointer_dragging) {
-		double cursor_x_capture_space = buffer_x_to_capture_x(yazu, seat->cursor_x);
-		double cursor_y_capture_space = buffer_y_to_capture_y(yazu, seat->cursor_y);
-		double cursor_grab_diff_x = seat->capture_grab_x - cursor_x_capture_space;
-		double cursor_grab_diff_y = seat->capture_grab_y - cursor_y_capture_space;
-		yazu->capture_target_x += cursor_grab_diff_x;
-		yazu->capture_target_y += cursor_grab_diff_y;
-		clamp_capture_target(yazu);
 
-		set_dirty(yazu);
+	if (seat->pointer_dragging) {
+		drag_capture(yazu, old_cursor_x, old_cursor_y, seat->cursor_x, seat->cursor_y);
 	}
 
 	add_motion_event(&seat->pointer_motion_events,
 		seat->cursor_x, seat->cursor_y, time);
-}
-
-static void handle_drag_release(struct yazu* yazu, struct yazu_seat* seat, uint32_t time) {
-	struct wl_array *pointer_motion_events = &seat->pointer_motion_events;
-	trim_old_motion_events(pointer_motion_events, time);
-
-	size_t num_events = pointer_motion_events->size / sizeof(struct yazu_input_motion_event);
-
-	struct yazu_input_motion_event *first, *last;
-	last = pointer_motion_events->data;
-	first = last + (num_events - 1);
-
-	uint32_t dt = last->time - first->time;
-	if (dt <= 0) {
-		return;
-	}
-
-	double dx, dy;
-	dx = last->x - first->x;
-	dy = last->y - first->y;
-
-	if (dx == 0 || dy == 0) {
-		return;
-	}
-
-	yazu->sliding = true;
-	yazu->slide_last_tick_time = time;
-
-	// buffer space pointer velocity in pixels per millisecond
-	double vx, vy;
-	vx = dx / dt;
-	vy = dy / dt;
-
-	// capture space capture target velocity in pixels per millisecond
-	yazu->slide_x_velocity = -vx / real_zoom_scale(yazu);
-	yazu->slide_y_velocity = -vy / real_zoom_scale(yazu);
-	double slide_velocity = sqrt(
-		squared_distance(
-			yazu->slide_x_velocity,
-			yazu->slide_y_velocity));
-	double acceleration_magnitude =
-		(-0.01 * yazu->estimated_output_scale) / real_zoom_scale(yazu);
-	yazu->slide_x_acceleration =
-		acceleration_magnitude * (yazu->slide_x_velocity / slide_velocity);
-	yazu->slide_y_acceleration =
-		acceleration_magnitude * (yazu->slide_y_velocity / slide_velocity);
-
-	set_dirty(yazu);
 }
 
 static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
@@ -240,20 +200,18 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 			yazu->sliding = false;
 			yazu->dragging = true;
 			seat->pointer_dragging = true;
-			seat->capture_grab_x = buffer_x_to_capture_x(yazu, seat->cursor_x);
-			seat->capture_grab_y = buffer_y_to_capture_y(yazu, seat->cursor_y);
 
 			pointer_set_shape(seat, wl_pointer, serial);
 		} else if (seat->pointer_dragging && !is_pressed) {
 			yazu->dragging = false;
 			seat->pointer_dragging = false;
 
-			handle_drag_release(yazu, seat, time);
+			handle_drag_release(yazu, &seat->pointer_motion_events,
+				time);
 			pointer_set_shape(seat, wl_pointer, serial);
 		}
 
 		break;
-
 	case BTN_RIGHT:
 		yazu->running = false;
 
@@ -309,6 +267,10 @@ static const struct wl_pointer_listener pointer_listener = {
 
 // BEGIN TOUCH
 
+static size_t get_num_touch_points(struct yazu_seat *seat) {
+	return seat->touch_points.size / sizeof(struct yazu_touch_point);
+}
+
 static struct yazu_touch_point * get_touch_point(struct yazu_seat *seat,
 		int32_t id, int32_t *index) {
 	struct yazu_touch_point *point;
@@ -334,6 +296,7 @@ static struct yazu_touch_point * get_touch_point(struct yazu_seat *seat,
 
 static void touch_handle_down(struct yazu_seat *seat, int32_t id,
 		uint32_t time, double x, double y) {
+	struct yazu *yazu = seat->yazu;
 	struct yazu_touch_point *touch_point = get_touch_point(seat, id, NULL);
 	assert(touch_point == NULL);
 
@@ -341,25 +304,51 @@ static void touch_handle_down(struct yazu_seat *seat, int32_t id,
 	touch_point->id = id;
 	wl_array_init(&touch_point->motion_events);
 	add_motion_event(&touch_point->motion_events, x, y, time);
+
+	if (!yazu->dragging && get_num_touch_points(seat) == 1) {
+		yazu->sliding = false;
+		yazu->dragging = true;
+		seat->touch_dragging = true;
+	}
 }
 
 static void touch_handle_up(struct yazu_seat *seat, int32_t id,
 		uint32_t time) {
+	struct yazu *yazu = seat->yazu;
 	int32_t touch_point_index;
 	struct yazu_touch_point *touch_point = get_touch_point(seat, id,
 		&touch_point_index);
 	assert(touch_point != NULL);
 
-	wl_array_release(&touch_point->motion_events);
 	struct yazu_touch_point removed_touch_point;
 	wl_array_remove(&seat->touch_points, removed_touch_point,
 		touch_point_index);
+	uint32_t num_touch_points = get_num_touch_points(seat);
+
+	if (num_touch_points == 0 && seat->touch_dragging) {
+		yazu->dragging = false;
+		seat->touch_dragging = false;
+
+		handle_drag_release(yazu, &removed_touch_point.motion_events,
+			time);
+	}
+
+	wl_array_release(&removed_touch_point.motion_events);
 }
 
 static void touch_handle_motion(struct yazu_seat *seat, int32_t id,
 		uint32_t time, double x, double y) {
 	struct yazu_touch_point *touch_point = get_touch_point(seat, id, NULL);
 	assert(touch_point != NULL);
+
+	uint32_t num_touch_points = get_num_touch_points(seat);
+	if (seat->touch_dragging && num_touch_points == 1) {
+		struct yazu_input_motion_event *last_input_motion_event =
+			touch_point->motion_events.data;
+		drag_capture(seat->yazu,
+			last_input_motion_event->x, last_input_motion_event->y,
+			x, y);
+	}
 
 	add_motion_event(&touch_point->motion_events, x, y, time);
 }
@@ -372,8 +361,9 @@ static void touch_queue_event(struct yazu_seat *seat,
 	touch_event->type = type;
 	touch_event->id = id;
 	touch_event->time = time;
-	touch_event->x = x;
-	touch_event->y = y;
+	get_buffer_xy_from_surface_xy(seat->yazu,
+		wl_fixed_to_double(x), wl_fixed_to_double(y),
+		&touch_event->x, &touch_event->y);
 }
 
 static void touch_queue_handle_down(void *data, struct wl_touch *wl_touch,
@@ -401,19 +391,18 @@ static void touch_handle_frame(void *data, struct wl_touch *wl_touch) {
 
 	struct yazu_touch_event *event;
 	wl_array_for_each(event, &seat->wl_touch_events) {
-		double x, y;
-		x = wl_fixed_to_double(event->x);
-		y = wl_fixed_to_double(event->y);
-
 		switch(event->type) {
 		case DOWN:
-			touch_handle_down(seat, event->id, event->time, x, y);
+			touch_handle_down(seat, event->id, event->time, event->x, event->y);
+
 			break;
 		case UP:
 			touch_handle_up(seat, event->id, event->time);
+
 			break;
 		case MOTION:
-			touch_handle_motion(seat, event->id, event->time, x, y);
+			touch_handle_motion(seat, event->id, event->time, event->x, event->y);
+
 			break;
 		}
 	}
@@ -783,6 +772,7 @@ static struct yazu_output * yazu_output_from_wl_output(struct yazu *yazu, struct
 			return output;
 		}
 	}
+
 	assert(false);
 }
 
@@ -995,14 +985,6 @@ static double buffer_y_to_capture_y(struct yazu *yazu, double buffer_y) {
 	return yazu->capture_target_y + (buffer_y - yazu->half_buffer_height) / real_zoom_scale(yazu);
 }
 
-static bool clamp_capture_target(struct yazu *yazu) {
-	bool clamped_x, clamped_y;
-	clamped_x = clamp_capture_target_x(yazu);
-	clamped_y = clamp_capture_target_y(yazu);
-
-	return clamped_x || clamped_y;
-}
-
 static bool clamp_capture_target_x(struct yazu *yazu) {
 	bool did_clamp = false;
 	double buffer_left_capture_x = buffer_x_to_capture_x(yazu, 0);
@@ -1030,6 +1012,33 @@ static bool clamp_capture_target_y(struct yazu *yazu) {
 	}
 
 	return did_clamp;
+}
+
+static bool clamp_capture_target(struct yazu *yazu) {
+	bool clamped_x, clamped_y;
+	clamped_x = clamp_capture_target_x(yazu);
+	clamped_y = clamp_capture_target_y(yazu);
+
+	return clamped_x || clamped_y;
+}
+
+static void drag_capture(struct yazu *yazu, double old_buffer_x, double old_buffer_y,
+		double buffer_x, double buffer_y) {
+	double old_buffer_x_capture_space, old_buffer_y_capture_space;
+	double buffer_x_capture_space, buffer_y_capture_space;
+	double buffer_drag_diff_x, buffer_drag_diff_y;
+
+	old_buffer_x_capture_space = buffer_x_to_capture_x(yazu, old_buffer_x);
+	old_buffer_y_capture_space = buffer_y_to_capture_y(yazu, old_buffer_y);
+	buffer_x_capture_space = buffer_x_to_capture_x(yazu, buffer_x);
+	buffer_y_capture_space = buffer_y_to_capture_y(yazu, buffer_y);
+	buffer_drag_diff_x = buffer_x_capture_space - old_buffer_x_capture_space;
+	buffer_drag_diff_y = buffer_y_capture_space - old_buffer_y_capture_space;
+	yazu->capture_target_x -= buffer_drag_diff_x;
+	yazu->capture_target_y -= buffer_drag_diff_y;
+	clamp_capture_target(yazu);
+
+	set_dirty(yazu);
 }
 
 static void get_transformed_buffer_dimensions(
@@ -1102,6 +1111,54 @@ static void add_motion_event(struct wl_array *motion_events, double x,
 	motion_event->time = time;
 
 	trim_old_motion_events(motion_events, time);
+}
+
+static void handle_drag_release(struct yazu* yazu,
+		struct wl_array *motion_events, uint32_t time) {
+	trim_old_motion_events(motion_events, time);
+
+	size_t num_events = motion_events->size / sizeof(struct yazu_input_motion_event);
+
+	struct yazu_input_motion_event *first, *last;
+	last = motion_events->data;
+	first = last + (num_events - 1);
+
+	uint32_t dt = last->time - first->time;
+	if (dt <= 0) {
+		return;
+	}
+
+	double dx, dy;
+	dx = last->x - first->x;
+	dy = last->y - first->y;
+
+	if (dx == 0 || dy == 0) {
+		return;
+	}
+
+	yazu->sliding = true;
+	yazu->slide_last_tick_time = time;
+
+	// buffer space velocity in pixels per millisecond
+	double vx, vy;
+	vx = dx / dt;
+	vy = dy / dt;
+
+	// capture space capture target velocity in pixels per millisecond
+	yazu->slide_x_velocity = -vx / real_zoom_scale(yazu);
+	yazu->slide_y_velocity = -vy / real_zoom_scale(yazu);
+	double slide_velocity = sqrt(
+		squared_distance(
+			yazu->slide_x_velocity,
+			yazu->slide_y_velocity));
+	double acceleration_magnitude =
+		(-0.01 * yazu->estimated_output_scale) / real_zoom_scale(yazu);
+	yazu->slide_x_acceleration =
+		acceleration_magnitude * (yazu->slide_x_velocity / slide_velocity);
+	yazu->slide_y_acceleration =
+		acceleration_magnitude * (yazu->slide_y_velocity / slide_velocity);
+
+	set_dirty(yazu);
 }
 
 static double squared_distance(double dx, double dy) {

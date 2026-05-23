@@ -117,7 +117,7 @@ struct yazu_touch_event {
 	enum yazu_touch_event_type type;
 	int32_t id;
 	uint32_t time;
-	wl_fixed_t x, y;
+	double x, y;
 };
 
 struct yazu_input_motion_event {
@@ -136,8 +136,6 @@ struct yazu_seat {
 	struct wl_list link;
 
 	struct wl_seat *wl_seat;
-
-	double capture_grab_x, capture_grab_y;
 
 	// pointer
 	struct wl_pointer *wl_pointer;
