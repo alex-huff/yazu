@@ -86,7 +86,7 @@ struct yazu {
 
 	bool zooming;
 	uint32_t zoom_last_tick_time;
-	double zoom_target_percent;
+	double zoom_target_level;
 	struct yazu_seat *zoom_seat;
 
 	bool gl_initialized;
@@ -104,7 +104,7 @@ struct yazu {
 	uint32_t transformed_buffer_width, transformed_buffer_height;
 	double estimated_output_scale;
 	double capture_target_x, capture_target_y;
-	double zoom_scale, zoom_percent;
+	double zoom_level, zoom_scale;
 };
 
 enum yazu_touch_event_type {
